@@ -102,16 +102,16 @@ export class WorldScene {
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.08
+    this.renderer.toneMappingExposure = 1.12
     this.renderer.domElement.style.display = 'block'
     this.renderer.domElement.style.width = '100%'
     this.renderer.domElement.style.height = '100%'
     container.appendChild(this.renderer.domElement)
 
     this.scene.background = this.bg
-    this.scene.fog = new THREE.Fog(this.bg.getHex(), 70, 215)
+    this.scene.fog = new THREE.Fog(this.bg.getHex(), 190, 640)
 
-    this.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 500)
+    this.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 900)
     this.camera.position.set(34, 30, 34)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
@@ -131,22 +131,22 @@ export class WorldScene {
     this.controls.panSpeed = 0.95
     this.controls.addEventListener('change', () => this.clampTarget())
 
-    this.hemi = new THREE.HemisphereLight(0xbcd7ff, 0x3a4a3a, 0.85)
+    this.hemi = new THREE.HemisphereLight(0xcfe4ff, 0x506046, 1.15)
     this.scene.add(this.hemi)
-    this.sun = new THREE.DirectionalLight(0xffe3b3, 1.7)
+    this.sun = new THREE.DirectionalLight(0xffe3b3, 2.4)
     this.sun.castShadow = true
     this.sun.shadow.mapSize.set(2048, 2048)
     const sc = this.sun.shadow.camera
-    sc.left = -95; sc.right = 95; sc.top = 95; sc.bottom = -95
-    sc.near = 1; sc.far = 320
+    sc.left = -120; sc.right = 120; sc.top = 120; sc.bottom = -120
+    sc.near = 1; sc.far = 460
     this.sun.shadow.bias = -0.0006
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
 
     // podklad mimo herní mřížku
-    const outer = new THREE.Mesh(new THREE.PlaneGeometry(700, 700), mat('#3f6b41'))
+    const outer = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), mat('#4e7a48'))
     outer.rotation.x = -Math.PI / 2
-    outer.position.y = -0.5
+    outer.position.y = -1.4
     outer.receiveShadow = true
     this.rootGroup.add(outer)
     this.rootGroup.add(this.terrainGroup, this.decoGroup, this.roadGroup, this.vehGroup)
@@ -242,6 +242,9 @@ export class WorldScene {
       if (p.b_id) this.addBuilding(p)
       if (p.owner_id) this.addOwnerFrame(p)
     }
+    const keepSel = this.selId, keepHov = this.hovId
+    this.selId = null; this.hovId = null
+    this.setSelected(keepSel); this.setHover(keepHov)
     this.controls.target.set(0, 0, 0)
     this.resetView()
   }
@@ -284,18 +287,23 @@ export class WorldScene {
     }
     const tiles = [...roadSet].map((k) => k.split(',').map(Number) as [number, number])
     if (!tiles.length) return
+    const shoulderGeo = new THREE.BoxGeometry(TILE * 1.42, 0.05, TILE * 1.42)
     const asphaltGeo = new THREE.BoxGeometry(TILE, 0.08, TILE)
-    const curbGeo = new THREE.BoxGeometry(TILE + 0.12, 0.05, TILE + 0.12)
-    const dashGeo = new THREE.BoxGeometry(0.34, 0.02, 0.1)
-    asphaltGeo.userData.cached = true; curbGeo.userData.cached = true; dashGeo.userData.cached = true
-    const asphalt = new THREE.InstancedMesh(asphaltGeo, mat('#3d434d'), tiles.length)
-    const curb = new THREE.InstancedMesh(curbGeo, mat('#2a2f37'), tiles.length)
-    asphalt.receiveShadow = true
+    const curbGeo = new THREE.BoxGeometry(TILE + 0.16, 0.06, TILE + 0.16)
+    const dashGeo = new THREE.BoxGeometry(0.46, 0.02, 0.09)
+    shoulderGeo.userData.cached = true; asphaltGeo.userData.cached = true
+    curbGeo.userData.cached = true; dashGeo.userData.cached = true
+    const shoulder = new THREE.InstancedMesh(shoulderGeo, mat('#7d7460'), tiles.length)
+    const asphalt = new THREE.InstancedMesh(asphaltGeo, mat('#61676f'), tiles.length)
+    const curb = new THREE.InstancedMesh(curbGeo, mat('#8b9199'), tiles.length)
+    asphalt.receiveShadow = true; shoulder.receiveShadow = true; curb.receiveShadow = true
     const dashes: { x: number; z: number; rot: number }[] = []
     tiles.forEach(([x, y], i) => {
       const pos = this.tilePos(x, y)
-      asphalt.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, 0.05, pos.z))
-      curb.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, 0.015, pos.z))
+      const h = this.terrain?.heightAt(pos.x, pos.z) ?? 0
+      shoulder.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, h + 0.02, pos.z))
+      asphalt.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, h + 0.075, pos.z))
+      curb.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, h + 0.045, pos.z))
       const ne = roadSet.has(`${x + 1},${y - 1}`); const sw = roadSet.has(`${x - 1},${y + 1}`)
       const nw = roadSet.has(`${x - 1},${y - 1}`); const se = roadSet.has(`${x + 1},${y + 1}`)
       const n = roadSet.has(`${x},${y - 1}`); const s = roadSet.has(`${x},${y + 1}`)
@@ -307,14 +315,15 @@ export class WorldScene {
       if (axisNE || straightEW) dashes.push({ x: pos.x, z: pos.z, rot: axisNE ? Math.PI / 4 : Math.PI / 2 })
       else if (axisNW || straightNS) dashes.push({ x: pos.x, z: pos.z, rot: axisNW ? -Math.PI / 4 : 0 })
     })
+    shoulder.instanceMatrix.needsUpdate = true
     asphalt.instanceMatrix.needsUpdate = true
     curb.instanceMatrix.needsUpdate = true
-    this.roadGroup.add(asphalt, curb)
+    this.roadGroup.add(shoulder, asphalt, curb)
     if (dashes.length) {
-      const dm = new THREE.InstancedMesh(dashGeo, mat('#c9b45c'), dashes.length)
+      const dm = new THREE.InstancedMesh(dashGeo, mat('#cfd3d8'), dashes.length)
       dashes.forEach((d, i) => {
         dm.setMatrixAt(i, new THREE.Matrix4().compose(
-          new THREE.Vector3(d.x, 0.1, d.z),
+          new THREE.Vector3(d.x, (this.terrain?.heightAt(d.x, d.z) ?? 0) + 0.125, d.z),
           new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), d.rot),
           new THREE.Vector3(1, 1, 1),
         ))
@@ -392,13 +401,24 @@ export class WorldScene {
     return g
   }
 
+  /** y rámečku: nejvyšší roh pozemku + malý odstup → leží na terénu */
+  private frameY(x: number, y: number) {
+    const pos = this.tilePos(x, y)
+    if (!this.terrain) return 0.1
+    const r = TILE / 2
+    return Math.max(
+      this.terrain.heightAt(pos.x - r, pos.z - r), this.terrain.heightAt(pos.x + r, pos.z - r),
+      this.terrain.heightAt(pos.x - r, pos.z + r), this.terrain.heightAt(pos.x + r, pos.z + r),
+    ) + 0.07
+  }
+
   setSelected(id: string | null) {
     this.selId = id
     if (!id) { this.selFrame.visible = false; return }
     const p = this.plots.get(id)
     if (!p) { this.selFrame.visible = false; return }
     const pos = this.tilePos(p.x, p.y)
-    this.selFrame.position.set(pos.x, (this.terrain?.heightAt(pos.x, pos.z) ?? 0) + 0.03, pos.z)
+    this.selFrame.position.set(pos.x, this.frameY(p.x, p.y), pos.z)
     this.selFrame.visible = true
   }
 
@@ -409,7 +429,7 @@ export class WorldScene {
     const p = this.plots.get(id)
     if (!p) { this.hovFrame.visible = false; return }
     const pos = this.tilePos(p.x, p.y)
-    this.hovFrame.position.set(pos.x, (this.terrain?.heightAt(pos.x, pos.z) ?? 0) + 0.03, pos.z)
+    this.hovFrame.position.set(pos.x, this.frameY(p.x, p.y), pos.z)
     this.hovFrame.visible = true
   }
 

@@ -18,15 +18,18 @@ import * as THREE from 'three'
 import type { MapData } from '../../api'
 import { TILE, mat } from './materials'
 
-export const EXT = 12                 // prstenec krajiny kolem hřiště (dlaždice)
+export const EXT = 14                 // prstenec krajiny kolem hřiště (dlaždice)
 export const WATER_Y = -0.30          // hladina
 const BED_Y = -0.95                   // dno
 
 /* ── value noise (deterministický, hladký) ───────────────────────────────── */
 function lattice(ix: number, iy: number, seed: number) {
-  let h = (ix * 374761393 + iy * 668265263 + seed * 974711) | 0
-  h = ((h ^ (h >> 13)) * 1274126177) | 0
-  return ((h ^ (h >> 16)) >>> 0) / 4294967295
+  // xorshift mix s LOGICKÝMI posuny — jinak se sign bit vyruší a noise
+  // žije jen v [0, 0.5] (plochý svět, mrtvé masky)
+  let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 974711)) | 0
+  h = Math.imul(h ^ (h >>> 13), 1274126177)
+  h ^= h >>> 16
+  return (h >>> 0) / 4294967296
 }
 function vnoise(x: number, y: number, seed: number) {
   const ix = Math.floor(x), iy = Math.floor(y)
@@ -69,9 +72,8 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const toG = (x: number, z: number): [number, number] =>
     [x / TILE + (W - 1) / 2, z / TILE + (H - 1) / 2]
 
-  /** výška v mřížkových souřadnicích (dlaždice, i mimo hřiště) */
-  const heightG = (gx: number, gy: number): number => {
-    // masky ze 4 sousedních dlaždic (vertex leží na rohu čtverice)
+  /** masky ze 4 sousedních dlaždic (vertex leží na rohu čtverice) */
+  const masks = (gx: number, gy: number) => {
     let water = 0, road = 0, graded = 0
     for (const [dx, dy] of [[0, 0], [-1, 0], [0, -1], [-1, -1]] as const) {
       const t = tileType(gx + dx, gy + dy)
@@ -79,19 +81,32 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
       if (t === 'road') road++
       if (owned.has(`${gx + dx},${gy + dy}`)) graded++
     }
-    const n = fbm(gx * 0.085, gy * 0.085, 7)
-    let h = (n - 0.5) * 0.62                       // mírné kopce ±0.31
-    h += (fbm(gx * 0.31 + 5, gy * 0.31 + 5, 13) - 0.5) * 0.12
-    if (graded > 0) h *= 1 - 0.75 * (graded / 4)   // zastavěno = srovnaný pozemek
-    if (road > 0) h *= 1 - 0.9 * (road / 4)        // silnice v rovině
-    if (water >= 2) h = BED_Y + (n - 0.5) * 0.3    // prohlubeň s vodou
-    else if (water === 1) h = Math.min(h, -0.05) - 0.12  // břeh
+    return { water, road, graded }
+  }
+
+  /** výška v mřížkových souřadnicích (dlaždice, i mimo hřiště) */
+  const heightG = (gx: number, gy: number): number => {
+    const { water, road, graded } = masks(gx, gy)
+    const n = fbm(gx * 0.075, gy * 0.075, 7)
+    let h = (n - 0.5) * 1.35                        // vlnité kopce ±0.68
+    h += (fbm(gx * 0.21 + 5, gy * 0.21 + 5, 13) - 0.5) * 0.45
+    h += (fbm(gx * 0.55 + 9, gy * 0.55 + 2, 17) - 0.5) * 0.12
+    if (graded > 0) h *= 1 - 0.8 * (graded / 4)    // zastavěno = srovnaný pozemek
+    if (road > 0) h *= 1 - 0.95 * Math.min(1, road / 2)  // silnice v rovině
+    const lake = smooth(0.74, 0.86, fbm(gx * 0.05 + 140, gy * 0.05 - 60, 51))
+    if (water >= 2) h = BED_Y + (n - 0.5) * 0.35          // příkop kolem ostrova
+    else if (water === 1) h = Math.min(h, -0.02) - 0.10   // břeh s pláží
+    else if (lake > 0) h = Math.min(h, h + (BED_Y + 0.1 - h) * lake)  // jezera
+    else if (h < WATER_Y + 0.07) {                        // údolí: měkké dno nad vodou
+      const t = WATER_Y + 0.07
+      h = t + (h - t) * 0.12
+    }
     // za hranicí světa: kopce a hory, ať horizont nikdy není prázdný
     const ox = Math.max(0, -gx, gx - (W - 1))
     const oz = Math.max(0, -gy, gy - (H - 1))
     const d = Math.sqrt(ox * ox + oz * oz)
-    const up = smooth(1, EXT * 0.85, d)
-    h += up * up * 5.5 + up * (fbm(gx * 0.16 + 71, gy * 0.16 + 3, 21) - 0.35) * 3.2
+    const up = smooth(2, EXT * 0.8, d)
+    h += up * up * 8.5 + up * (fbm(gx * 0.16 + 71, gy * 0.16 + 3, 21) - 0.35) * 4.0
     return h
   }
 
@@ -110,14 +125,15 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const pos = new Float32Array(cols * rows * 3)
   const col = new Float32Array(cols * rows * 3)
   const idx: number[] = []
-  const cGrass1 = new THREE.Color('#4d8a4c')
-  const cGrass2 = new THREE.Color('#63a05a')
-  const cDry = new THREE.Color('#8fa055')
-  const cDirt = new THREE.Color('#7c6a4e')
-  const cSand = new THREE.Color('#c8b78c')
-  const cRock = new THREE.Color('#7e7869')
-  const cSnow = new THREE.Color('#e9edf3')
-  const cBed = new THREE.Color('#3c4a44')
+  const cGrass1 = new THREE.Color('#4f9048')
+  const cGrass2 = new THREE.Color('#6cae55')
+  const cDry = new THREE.Color('#9dad55')
+  const cDirt = new THREE.Color('#8a7150')
+  const cSand = new THREE.Color('#d3bf8e')
+  const cRock = new THREE.Color('#87816f')
+  const cSnow = new THREE.Color('#eef2f7')
+  const cBed = new THREE.Color('#4a5a50')
+  const cGravel = new THREE.Color('#7d7460')
   const tmp = new THREE.Color()
 
   for (let iy = 0; iy < rows; iy++) {
@@ -132,11 +148,13 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
       const sl = Math.abs(heightG(gx + 1, gy) - h) + Math.abs(heightG(gx, gy + 1) - h)
       const patch = fbm(gx * 0.17 + 91, gy * 0.17 + 17, 29)     // hlinité patche
       const dry = fbm(gx * 0.12 + 3, gy * 0.12 + 55, 37)        // suchá tráva
+      const rd = masks(gx, gy).road
       tmp.copy(cGrass1).lerp(cGrass2, vnoise(gx * 0.5, gy * 0.5, 41))
-      tmp.lerp(cDry, smooth(0.55, 0.8, dry) * 0.7)
-      tmp.lerp(cDirt, smooth(0.6, 0.82, patch) * 0.85)
-      tmp.lerp(cRock, smooth(0.28, 0.55, sl))
-      if (h > 3.2) tmp.lerp(cSnow, smooth(3.2, 4.6, h))
+      tmp.lerp(cDry, smooth(0.52, 0.78, dry) * 0.75)
+      tmp.lerp(cDirt, smooth(0.56, 0.8, patch) * 0.9)
+      tmp.lerp(cRock, smooth(0.3, 0.62, sl))
+      if (rd > 0 && rd < 4) tmp.lerp(cGravel, 0.75 - rd * 0.16)  // násep kolem silnic
+      if (h > 4.2) tmp.lerp(cSnow, smooth(4.2, 6.6, h))
       if (h < 0.06 && h > WATER_Y - 0.22) tmp.lerp(cSand, smooth(WATER_Y - 0.18, 0.02, h) * 0.9)
       if (h <= WATER_Y - 0.15) tmp.lerp(cBed, smooth(WATER_Y - 0.1, BED_Y + 0.2, h))
       const j = 0.96 + lattice(ix, iy, 61) * 0.08
@@ -165,9 +183,9 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
     transparent: true,
     uniforms: {
       uTime: { value: 0 },
-      uDeep: { value: new THREE.Color('#1c4d6d') },
-      uShallow: { value: new THREE.Color('#2f89ad') },
-      uSky: { value: new THREE.Color('#a9cbe8') },
+      uDeep: { value: new THREE.Color('#17567c') },
+      uShallow: { value: new THREE.Color('#2f92b4') },
+      uSky: { value: new THREE.Color('#bfe0f2') },
     },
     vertexShader: `
       uniform float uTime;
@@ -203,7 +221,7 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
         c = mix(c, uSky, fres * 0.55);
         float glint = pow(max(dot(reflect(-normalize(vView), normalize(vN)), vec3(0.35, 0.5, 0.55)), 0.0), 24.0);
         c += vec3(1.0, 0.97, 0.85) * glint * 0.5;
-        gl_FragColor = vec4(c, 0.9);
+        gl_FragColor = vec4(c, 0.88);
       }`,
   })
   const water = new THREE.Mesh(wgeo, wmat)
@@ -228,25 +246,27 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
       const cx = (gx - (W - 1) / 2) * TILE
       const cz = (gy - (H - 1) / 2) * TILE
       const outside = !inPlay
-      const density = t === 'forest' ? 2.6 : outside ? 1.5 : 0.22
+      const cluster = fbm(gx * 0.09 + 7, gy * 0.09 - 3, 61)
+      const density = t === 'forest' ? 1.5 + smooth(0.42, 0.68, cluster) * 3.6
+        : outside ? 1.2 + smooth(0.4, 0.66, cluster) * 2.6 : 0.18
       const n = rnd(gx * 3.7, gy * 2.9) * density
       for (let i = 0; i < Math.floor(n); i++) {
         const ox = (rnd(gx + i * 13.7, gy + i * 7.1) - 0.5) * TILE * 0.9
         const oz = (rnd(gx + i * 5.3 + 40, gy + i * 11.9) - 0.5) * TILE * 0.9
         trees.push({
           x: cx + ox, z: cz + oz, y: heightAt(cx + ox, cz + oz),
-          s: 0.8 + rnd(gx + i * 3.1, gy + i * 9.7) * 0.75,
+          s: (0.85 + rnd(gx + i * 3.1, gy + i * 9.7) * 0.8) * 2.05,
           r: rnd(gx + i, gy + i * 2) * Math.PI,
         })
       }
       if (rnd(gx * 1.7 + 8, gy * 2.3 + 4) < (t === 'forest' ? 0.5 : 0.16)) {
-        bushes.push({ x: cx + (rnd(gx, gy + 3) - 0.5) * TILE, z: cz + (rnd(gx + 9, gy) - 0.5) * TILE, s: 0.5 + rnd(gx + 2, gy + 6) * 0.6 })
+        bushes.push({ x: cx + (rnd(gx, gy + 3) - 0.5) * TILE, z: cz + (rnd(gx + 9, gy) - 0.5) * TILE, s: (0.5 + rnd(gx + 2, gy + 6) * 0.6) * 1.6 })
       }
       if ((t === 'mine' || h > 1.2) && rnd(gx * 2.1 + 15, gy * 1.3 + 22) < 0.5) {
-        rocks.push({ x: cx + (rnd(gx + 4, gy) - 0.5) * TILE, z: cz + (rnd(gx, gy + 7) - 0.5) * TILE, s: 0.5 + rnd(gx + 6, gy + 1) * 0.9, r: rnd(gx + 3, gy + 8) * Math.PI })
+        rocks.push({ x: cx + (rnd(gx + 4, gy) - 0.5) * TILE, z: cz + (rnd(gx, gy + 7) - 0.5) * TILE, s: (0.5 + rnd(gx + 6, gy + 1) * 0.9) * 1.5, r: rnd(gx + 3, gy + 8) * Math.PI })
       }
-      if (outside && h > 2.2 && rnd(gx * 1.1 + 60, gy * 1.7 + 30) < 0.16) {
-        peaks.push({ x: cx, z: cz, s: 1.6 + rnd(gx + 12, gy + 24) * 2.6, r: rnd(gx + 40, gy + 50) * Math.PI })
+      if (outside && h > 2.6 && rnd(gx * 1.1 + 60, gy * 1.7 + 30) < 0.2) {
+        peaks.push({ x: cx, z: cz, s: 2.0 + rnd(gx + 12, gy + 24) * 3.2, r: rnd(gx + 40, gy + 50) * Math.PI })
       }
     }
   }
