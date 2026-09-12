@@ -116,12 +116,19 @@ export type MapPlot = {
   b_id: string | null; b_code: string | null; b_name: string | null
   b_level: number | null; b_status: string | null; b_retail: boolean | null
   b_output: string | null; b_industry: string | null; b_tier: number | null
-  richness: number
+  richness: number; assessed_value: number
 }
 
 export type MapData = {
   grid: { w: number; h: number }
   plots: MapPlot[]
+}
+
+export type CatalogRow = {
+  code: string; name: string; industry: string; plot_type: string
+  capex: number; upkeep_hour: number; throughput: number; storage: number
+  max_level: number; build_seconds: number; is_retail: boolean
+  output_item: string | null; output_name: string | null; output_tier: number | null
 }
 
 export type OpenOrder = {
@@ -150,7 +157,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => req<{ ok: boolean; worldId: number; engine: string; version?: string }>('/health'),
+  health: () => req<{
+    ok: boolean; worldId: number; engine: string; version?: string; startingCapital: number
+  }>('/health'),
   macro: () => req<Macro>('/macro'),
   audit: () => req<Audit>('/audit'),
   items: () => req<{ items: Item[]; fees: { maker: number; taker: number } }>('/items'),
@@ -170,6 +179,16 @@ export const api = {
   cancelOrder: (orderId: number, companyId: number) =>
     req<{ orderId: number; cancelled: boolean; releasedQty: number; releasedCash: number }>(
       `/orders/${orderId}?companyId=${companyId}`, { method: 'DELETE' }),
+  catalog: () => req<{ buildings: CatalogRow[] }>('/buildings/catalog'),
+  createCompany: (name: string, industryCode: string) =>
+    req<{ companyId: number; startingCapital: number }>('/companies', {
+      method: 'POST', body: JSON.stringify({ name, industryCode }) }),
+  buyPlot: (plotId: string | number, companyId: number) =>
+    req<{ plotId: number; price: number }>(`/plots/${plotId}/buy`, {
+      method: 'POST', body: JSON.stringify({ companyId }) }),
+  build: (plotId: string | number, companyId: number, buildingCode: string) =>
+    req<{ buildingId: number; capex: number }>(`/plots/${plotId}/build`, {
+      method: 'POST', body: JSON.stringify({ companyId, buildingCode }) }),
   reset: () => req<{ ok: boolean; worldId: number; audit: string }>('/demo/reset', {
     method: 'POST', body: '{}',
   }),

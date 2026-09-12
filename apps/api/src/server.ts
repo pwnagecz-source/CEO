@@ -14,6 +14,7 @@ import {
   placeOrder, recentTrades, type Side,
 } from './market.ts'
 import { seedIfEmpty, worldInfo } from './seed.ts'
+import { buildBuilding, buyPlot, catalog, createCompany } from './game.ts'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'   // musí být 0.0.0.0 kvůli live preview
@@ -55,7 +56,13 @@ async function boot() {
   // ---------------------------------------------------------------- health ---
   app.get('/api/health', async () => {
     const v = await one<{ v: string }>(db, `SHOW server_version`)
-    return { ok: true, worldId, engine: 'PostgreSQL', version: v?.v }
+    // Čte se živě z DB, ne z boot konstanty: /api/demo/reset mění svět za běhu.
+    const w = await one<{ sc: number }>(
+      db, `SELECT starting_capital::float8 AS sc FROM worlds WHERE id=$1`, [worldId])
+    return {
+      ok: true, worldId, engine: 'PostgreSQL', version: v?.v,
+      startingCapital: w?.sc ?? 0,
+    }
   })
 
   // ----------------------------------------------------------------- world ---
@@ -63,7 +70,8 @@ async function boot() {
 
   // ------------------------------------------------------------------- map ---
   /**
-   * Celá mřížka světa pro izometrickou mapu: všech 288 pozemků s terénem,
+   * Celá mřížka světa pro izometrickou mapu (výchozí 40×20 = 800 pozemků)
+   * s terénem,
    * vlastníkem a budovou (pokud na pozemku stojí).
    *
    * Na rozdíl od /api/companies/:id (které vrací jen POZEMKY FIRMY) tohle je
@@ -82,7 +90,7 @@ async function boot() {
       b_id: string | null; b_code: string | null; b_name: string | null
       b_level: number | null; b_status: string | null; b_retail: boolean | null
       b_output: string | null; b_industry: string | null; b_tier: number | null
-      richness: number
+      richness: number; assessed_value: number
     }>(
       db,
       `SELECT p.id::text, p.x::int, p.y::int, p.plot_type::text AS type, p.status::text,
@@ -91,7 +99,8 @@ async function boot() {
               b.level::int AS b_level, b.status::text AS b_status,
               bt.is_retail AS b_retail, oi.code AS b_output,
               ind.code AS b_industry, oi.tier::int AS b_tier,
-              p.deposit_richness::float8 AS richness
+              p.deposit_richness::float8 AS richness,
+              p.assessed_value::float8 AS assessed_value
          FROM plots p
          LEFT JOIN companies c        ON c.id = p.owner_company_id
          LEFT JOIN buildings b        ON b.plot_id = p.id
@@ -336,6 +345,60 @@ async function boot() {
       try {
         return await tx((t) => cancelOrder(t, worldId, Number(req.query.companyId),
                                             Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  // --------------------------------------------------------------- sandbox ---
+  /** Katalog budov: „co mohu postavit a na jakém terénu“. */
+  app.get('/api/buildings/catalog', async () => ({ buildings: await catalog(db) }))
+
+  /** Založení nové firmy (jméno + odvětví). Startovní kapitál přes ledger. */
+  app.post<{ Body: { name: string; industryCode: string } }>(
+    '/api/companies', async (req, reply) => {
+      const b = req.body
+      if (!b || typeof b.name !== 'string' || typeof b.industryCode !== 'string') {
+        return reply.code(400).send({ error: 'name a industryCode jsou povinné' })
+      }
+      try {
+        return await tx((t) => createCompany(t, worldId, b.name, b.industryCode))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          const code = e.code === 'name_taken' ? 409 : statusForMarketError(e)
+          return reply.code(code).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Nákup volného pozemku (cena → sink_land_purchase). */
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/plots/:id/buy', async (req, reply) => {
+      try {
+        return await tx((t) => buyPlot(t, worldId, Number(req.body?.companyId),
+                                       Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Stavba budovy na vlastním pozemku správného biomu (capex → sink_capex). */
+  app.post<{ Params: { id: string }; Body: { companyId: number; buildingCode: string } }>(
+    '/api/plots/:id/build', async (req, reply) => {
+      const b = req.body
+      if (!b || typeof b.buildingCode !== 'string') {
+        return reply.code(400).send({ error: 'buildingCode je povinné' })
+      }
+      try {
+        return await tx((t) => buildBuilding(t, worldId, Number(b.companyId),
+                                             Number(req.params.id), b.buildingCode))
       } catch (e) {
         if (e instanceof MarketError) {
           return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })

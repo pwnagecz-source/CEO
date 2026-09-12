@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError, api,
-  type Audit, type Book, type Company, type CompanySummary, type Item,
+  type Audit, type Book, type CatalogRow, type Company, type CompanySummary, type Item,
   type Macro, type MapData, type MapPlot, type OpenOrder, type PlaceOrderResult, type Trade,
 } from './api'
-import BookPanel from './components/BookPanel'
 import GameView from './components/GameView'
-import CompanyPanel from './components/CompanyPanel'
-import Footer from './components/Footer'
-import Header from './components/Header'
-import ItemsPanel from './components/ItemsPanel'
-import TradeTape from './components/TradeTape'
+import SetupScreen from './components/SetupScreen'
+import TerminalView from './components/TerminalView'
 
 const POLL_MS = 2500
 const DEFAULT_ITEM = 'log'
@@ -22,14 +18,21 @@ const DEFAULT_ITEM = 'log'
  * interpolací na klientu (doc 00, real-time ADR-002) přijde s produkčním
  * tickem. Pro ověření ekonomiky je polling dostatečný a hlavně debugovatelný —
  * každý refresh je kompletní snímek, ne sekvence delt, kterou by šlo ztratit.
+ *
+ * Tok hry: při prvním vstupu běží PRŮVODCE ZALOŽENÍ FIRMY (jméno → odvětví →
+ * pozemek → stavba). Ten je jediná věc, kterou nový hráč musí pochopit;
+ * zbytek ekonomiky se odemyká postupně v herním pohledu a v Terminálu.
  */
 export default function App() {
   const [fatal, setFatal] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [health, setHealth] = useState<{ worldId: number; engine: string; version?: string } | null>(null)
+  const [health, setHealth] = useState<{
+    worldId: number; engine: string; version?: string; startingCapital: number
+  } | null>(null)
   const [macro, setMacro] = useState<Macro | null>(null)
   const [audit, setAudit] = useState<Audit | null>(null)
   const [items, setItems] = useState<Item[]>([])
+  const [catalog, setCatalog] = useState<CatalogRow[]>([])
   const [fees, setFees] = useState({ maker: 0.005, taker: 0.025 })
   const [companies, setCompanies] = useState<CompanySummary[]>([])
   const [companyId, setCompanyId] = useState<string | null>(null)
@@ -45,6 +48,11 @@ export default function App() {
   const [trades, setTrades] = useState<Trade[]>([])
   const [lastSync, setLastSync] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Akce ve hře (nákup pozemku, stavba) mají vlastní stav: text „co se děje“
+  // a chybovou hlášku, kterou ukazuje inspektor.
+  const [actBusy, setActBusy] = useState<string | null>(null)
+  const [actErr, setActErr] = useState<string | null>(null)
+  const [setup, setSetup] = useState(true)
 
   // Ref, aby interval nevolal stale closure a aby se při ručním refresh
   // nezdvojil požadavek.
@@ -54,11 +62,14 @@ export default function App() {
     if (inFlight.current) return
     inFlight.current = true
     try {
-      const [h, m, a, it, cos, tr, mp] = await Promise.all([
+      const [h, m, a, it, cos, tr, mp, cat] = await Promise.all([
         api.health(), api.macro(), api.audit(), api.items(), api.companies(), api.trades(),
-        api.map(),
+        api.map(), api.catalog(),
       ])
-      setHealth({ worldId: h.worldId, engine: h.engine, version: h.version })
+      setHealth({
+        worldId: h.worldId, engine: h.engine, version: h.version,
+        startingCapital: h.startingCapital,
+      })
       setMacro(m)
       setAudit(a)
       setItems(it.items)
@@ -66,6 +77,7 @@ export default function App() {
       setCompanies(cos.companies)
       setTrades(tr.trades)
       setMap(mp)
+      setCatalog(cat.buildings)
       setFatal(null)
 
       const cid = companyId ?? cos.companies[0]?.id ?? null
@@ -115,6 +127,29 @@ export default function App() {
     }
   }
 
+  /** Společný obal akcí ve hře: stavový text, chyba, refresh světa. */
+  async function gameAction(label: string, fn: () => Promise<void>) {
+    setActBusy(label); setActErr(null)
+    try {
+      await fn()
+      await refresh()
+    } catch (e) {
+      setActErr(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setActBusy(null)
+    }
+  }
+
+  const buyPlot = (p: MapPlot) => void gameAction('Nakupuji pozemek…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.buyPlot(p.id, Number(companyId))
+  })
+
+  const buildAt = (p: MapPlot, code: string) => void gameAction('Stavím…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.build(p.id, Number(companyId), code)
+  })
+
   async function place(p: {
     side: 'buy' | 'sell'; qty: number; priceLimit: number | null
     orderType: 'limit' | 'market'
@@ -157,6 +192,7 @@ export default function App() {
     setBusy(true)
     try {
       await api.reset()
+      setSelectedPlot(null)
       await refresh()
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
@@ -176,15 +212,27 @@ export default function App() {
     )
   }
 
-  const available = book && company
-    ? (company.inventory.find((r) => r.item === book.item.code)?.available ?? 0)
-    : 0
+  // ── PRŮVODCE ZALOŽENÍ FIRMY (první obrazovka hry) ─────────────────────────
+  if (setup && map && catalog.length > 0) {
+    return (
+      <SetupScreen
+        startingCapital={health?.startingCapital ?? 0}
+        plots={map.plots}
+        catalog={catalog}
+        onSkip={companies.length > 0
+          ? () => { void selectCompany(companies[0].id); setSetup(false) }
+          : undefined}
+        onDone={(id) => { void selectCompany(String(id)); setSetup(false); setMode('game') }}
+      />
+    )
+  }
 
   // ── HERNÍ POHLED (výchozí) ───────────────────────────────────────────────
   if (mode === 'game') {
     return (
       <GameView
         map={map}
+        catalog={catalog}
         company={company}
         companies={companies}
         companyId={companyId}
@@ -193,73 +241,41 @@ export default function App() {
         audit={audit}
         selectedPlot={selectedPlot}
         onSelectPlot={setSelectedPlot}
+        onBuy={buyPlot}
+        onBuild={buildAt}
+        onNewCompany={() => setSetup(true)}
         onOpenTerminal={() => setMode('terminal')}
+        busy={actBusy}
+        err={actErr}
       />
     )
   }
 
-  // ── EXPERTNÍ TERMINÁL ────────────────────────────────────────────────────
+  // ── EXPERTNÍ TERMINÁL (obchodování) ──────────────────────────────────────
   return (
-    <div className="app">
-      <Header
-        macro={macro}
-        audit={audit}
-        worldId={health?.worldId ?? null}
-        engine={health?.engine ?? null}
-        version={health?.version ?? null}
-        onRefresh={() => void refresh()}
-        onReset={() => void reset()}
-        onOpenGame={() => setMode('game')}
-        busy={busy}
-      />
-
-      <div className="main">
-        <div className="col">
-          <section className="panel">
-            <h2>
-              Položky
-              <span className="hint">{items.length} · klikni pro book</span>
-            </h2>
-            <div className="body" style={{ padding: 0 }}>
-              <ItemsPanel items={items} selected={itemCode} onSelect={(c) => void selectItem(c)} />
-            </div>
-          </section>
-        </div>
-
-        <div className="col">
-          <section className="panel">
-            <BookPanel
-              book={book}
-              fees={fees}
-              cash={company?.cash ?? 0}
-              escrow={company?.escrow ?? 0}
-              available={available}
-              companyLabel={company?.name ?? '—'}
-              busy={busy}
-              onPlace={place}
-            />
-          </section>
-          <section className="panel">
-            <TradeTape trades={trades} />
-          </section>
-        </div>
-
-        <div className="col">
-          <section className="panel">
-            <CompanyPanel
-              companies={companies}
-              selectedId={companyId}
-              onSelect={(id) => void selectCompany(id)}
-              company={company}
-              orders={orders}
-              busy={busy}
-              onCancel={(id) => void cancel(id)}
-            />
-          </section>
-        </div>
-      </div>
-
-      <Footer audit={audit} fees={fees} lastSync={lastSync} error={error} />
-    </div>
+    <TerminalView
+      macro={macro}
+      audit={audit}
+      health={health}
+      items={items}
+      itemCode={itemCode}
+      onSelectItem={(c) => void selectItem(c)}
+      book={book}
+      fees={fees}
+      companies={companies}
+      companyId={companyId}
+      onSelectCompany={(id) => void selectCompany(id)}
+      company={company}
+      orders={orders}
+      trades={trades}
+      busy={busy}
+      onPlace={place}
+      onCancel={(id) => void cancel(id)}
+      onRefresh={() => void refresh()}
+      onReset={() => void reset()}
+      onOpenGame={() => setMode('game')}
+      lastSync={lastSync}
+      error={error}
+    />
   )
 }

@@ -46,9 +46,10 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | Kompletní DDL (125 statementů) — 26 tabulek, 13 enumů, podvojný ledger, triggery, audit funkce | ✅ běží na skutečném Postgresu |
 | Matching engine: CLOB, price-time priority, limit + market (IOC), escrow, maker/taker poplatky, anti-wash, idempotence, rušení příkazů | ✅ end-to-end otestováno |
 | Pět audit invariantů včetně makro identity `M2 ≡ ΔM` a hlídače úniku escrow | ✅ |
-| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 288 pozemků, 4 demo firmy, 12 úvodních příkazů | ✅ |
-| **Herní pohled (výchozí):** izometrická mapa světa 24×12 s biomy, budovami, vlastnictvím a inspektorem pozemku; HUD s penězi a skladem | ✅ |
-| Expertní terminál (volitelný): order book s hloubkou, zadávání příkazů s odhadem exekuce, P&L firmy, sklad, páska obchodů, stavová lišta invariantů | ✅ |
+| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 800 pozemků (40×20), 4 demo firmy, 12 úvodních příkazů | ✅ |
+| **Herní pohled (výchozí):** izometrická mapa světa 40×20 s biomy, budovami, vlastnictvím, zoomem a inspektorem pozemku; HUD s penězi a skladem | ✅ |
+| **Sandbox:** průvodce založením firmy (jméno → odvětví → pozemek → stavba), nákup volných pozemků a stavba budov přímo z mapy — vše přes podvojný ledger | ✅ |
+| Expertní terminál (volitelný, zúžený na obchodování): přehled trhu s hledáním, order book s hloubkou, zadávání příkazů s odhadem exekuce, moje příkazy, páska obchodů, stavová lišta invariantů | ✅ |
 | Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
 
 ### Struktura
@@ -64,8 +65,8 @@ apps/web/src/
   api.ts       typovaný klient (relativní cesty → Vite proxy)
   estimate.ts  odhad exekuce proti booku (stejná logika jako engine)
   game/        izometrická projekce (iso.ts) a art direction (art.ts)
-  components/  GameView + WorldMap (herní pohled), Header, ItemsPanel, BookPanel,
-               CompanyPanel, TradeTape, Footer (expertní terminál)
+  components/  SetupScreen (průvodce), GameView + WorldMap (herní pohled),
+               TerminalView, BookPanel, TradeTape, Header, Footer (expertní terminál)
 apps/web/render-map.tsx  vyrenderuje mapu na SVG pro vizuální kontrolu bez prohlížeče
 tools/
   db/check_ddl.mjs      spuštění DDL na skutečném Postgresu, statement po statementu

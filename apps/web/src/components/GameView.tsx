@@ -1,4 +1,4 @@
-import type { Audit, Company, Macro, MapData, MapPlot } from '../api'
+import type { Audit, CatalogRow, Company, Macro, MapData, MapPlot } from '../api'
 import { compact, money, pct } from '../fmt'
 import { STATUS_GLOW, TERRAIN, terrainFor } from '../game/art'
 import { ownerColor } from '../game/iso'
@@ -6,6 +6,7 @@ import WorldMap from './WorldMap'
 
 type Props = {
   map: MapData | null
+  catalog: CatalogRow[]
   company: Company | null
   companies: { id: string; name: string }[]
   companyId: string | null
@@ -14,7 +15,12 @@ type Props = {
   audit: Audit | null
   selectedPlot: MapPlot | null
   onSelectPlot: (p: MapPlot | null) => void
+  onBuy: (plot: MapPlot) => void
+  onBuild: (plot: MapPlot, code: string) => void
+  onNewCompany: () => void
   onOpenTerminal: () => void
+  busy: string | null
+  err: string | null
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,15 +29,21 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 /**
- * Herní pohled: mapa jako hlavní scéna, kolem ní jen to, co hráč opravdu čte.
- * Žádné bid/ask tabulky, žádné invarianty v obličeji — ty zůstávají v Terminálu.
+ * Herní pohled: mapa jako hlavní scéna, inspektor jako jediné ovládací místo.
+ * Tady se nakupuje pozemek a staví budova — jeden klik, žádné tabulky bid/ask.
  */
 export default function GameView({
-  map, company, companies, companyId, onSelectCompany, macro, audit,
-  selectedPlot, onSelectPlot, onOpenTerminal,
+  map, catalog, company, companies, companyId, onSelectCompany, macro, audit,
+  selectedPlot, onSelectPlot, onBuy, onBuild, onNewCompany, onOpenTerminal, busy, err,
 }: Props) {
   const myPlots = map?.plots.filter((p) => p.owner_id === companyId) ?? []
   const myBuildings = myPlots.filter((p) => p.b_id)
+  const cash = company?.cash ?? 0
+
+  /** Co lze postavit na vybraném terénu (katalog filtrovaný podle plot_type). */
+  const buildable = selectedPlot
+    ? catalog.filter((c) => c.plot_type === selectedPlot.type)
+    : []
 
   return (
     <div className="game">
@@ -47,7 +59,7 @@ export default function GameView({
           </select>
           <div className="hud-stat">
             <span className="hud-k">Peníze</span>
-            <span className="hud-v money">{money(company?.cash ?? 0)}</span>
+            <span className="hud-v money">{money(cash)}</span>
           </div>
           <div className="hud-stat">
             <span className="hud-k">Sklad</span>
@@ -68,6 +80,7 @@ export default function GameView({
         </div>
         <div className="hud-right">
           {audit && <span className={`badge ${audit.ok ? 'pass' : 'fail'}`}>{audit.ok ? 'svět v pořádku' : 'pozor'}</span>}
+          <button className="ghost" onClick={onNewCompany}>＋ Nová firma</button>
           <button className="ghost" onClick={onOpenTerminal}>Terminál →</button>
         </div>
       </div>
@@ -93,12 +106,15 @@ export default function GameView({
         </div>
 
         <aside className="inspector">
+          {busy && <div className="insp-busy">{busy}</div>}
+          {err && <div className="insp-err">{err}</div>}
+
           {!selectedPlot && (
             <div className="insp-empty">
               <h3>Klikni na dlaždici</h3>
               <p className="dim">
-                Mapa je celý tvůj svět: {map?.grid.w ?? 24}×{map?.grid.h ?? 12} pozemků.
-                Barevný obrys = majitel, tečka nad budovou = co právě dělá.
+                Svět má {map?.grid.w ?? 40}×{map?.grid.h ?? 20} pozemků. Volné si můžeš koupit,
+                na vlastní postavit. Barevný obrys = majitel, tečka nad budovou = co právě dělá.
               </p>
               <p className="dim">
                 Tvé pozemky mají silný obrys v barvě
@@ -120,7 +136,7 @@ export default function GameView({
                   {selectedPlot.owner_id === companyId && <span className="badge info">tvé</span>}
                 </div>
               ) : (
-                <div className="insp-owner dim">volný pozemek</div>
+                <div className="insp-owner dim">volný pozemek · {money(selectedPlot.assessed_value)}</div>
               )}
 
               {selectedPlot.b_id ? (
@@ -133,21 +149,51 @@ export default function GameView({
                   <table className="insp-table">
                     <tbody>
                       <tr><td className="dim">Úroveň</td><td>{selectedPlot.b_level}</td></tr>
-                      <tr><td className="dim">Odvětví</td><td>{selectedPlot.b_industry ?? '—'}</td></tr>
                       <tr><td className="dim">Produkuje</td><td>{selectedPlot.b_output ?? '—'}</td></tr>
+                      <tr><td className="dim">Kapacita/h</td><td>{catalog.find((c) => c.code === selectedPlot.b_code)?.throughput ?? '—'}</td></tr>
+                      <tr><td className="dim">Provozní náklad/h</td><td>{money(catalog.find((c) => c.code === selectedPlot.b_code)?.upkeep_hour ?? 0)}</td></tr>
                       {selectedPlot.b_retail && <tr><td className="dim">Prodejna</td><td>ano (NPC zákazníci)</td></tr>}
                     </tbody>
                   </table>
                 </div>
+              ) : selectedPlot.owner_id === companyId ? (
+                <div className="insp-build">
+                  <h3>Co tady postavíš?</h3>
+                  <p className="dim">Na tomto terénu jde postavit:</p>
+                  {buildable.length === 0 && <p className="dim">Nic — terén se pro stavbu nehodí.</p>}
+                  {buildable.map((b) => (
+                    <div key={b.code} className="build-opt">
+                      <div className="build-opt__main">
+                        <span className="build-opt__name">{b.name}</span>
+                        <span className="build-opt__meta">
+                          {b.output_name ?? '—'} · {compact(b.throughput)}/h ·
+                          provoz {money(b.upkeep_hour)}/h
+                        </span>
+                      </div>
+                      <button className="btn btn--primary btn--sm"
+                        disabled={!!busy || cash < b.capex}
+                        onClick={() => onBuild(selectedPlot, b.code)}>
+                        {money(b.capex)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               ) : (
-                <div className="insp-empty">
+                <div className="insp-buy">
                   <p className="dim">
-                    {selectedPlot.owner_id === companyId
-                      ? 'Tvůj pozemek bez budovy. Stavění přijde v další fázi.'
-                      : selectedPlot.richness !== 1
-                        ? `Bohatství ložiska ${pct(selectedPlot.richness - 1, 0)} oproti průměru.`
-                        : 'Bez budovy.'}
+                    {selectedPlot.richness !== 1 && (
+                      <>Ložisko je o <strong>{pct(selectedPlot.richness - 1, 0)}</strong> bohatší/chudší
+                        než průměr. </>)}
+                    Terén <strong>{terrainFor(selectedPlot.type, false).label}</strong> umožňuje
+                    stavět: {buildable.map((b) => b.name).join(', ') || 'nic'}.
                   </p>
+                  {!selectedPlot.owner_id && (
+                    <button className="btn btn--primary wide"
+                      disabled={!!busy || cash < selectedPlot.assessed_value}
+                      onClick={() => onBuy(selectedPlot)}>
+                      Koupit pozemek · {money(selectedPlot.assessed_value)}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -156,11 +202,12 @@ export default function GameView({
           )}
 
           <div className="insp-tip">
-            <h4>Tip</h4>
+            <h4>Jak to funguje</h4>
             <p className="dim">
               Surovinové budovy (les, důl, voda) musí stát na správném terénu —
               proto mapa terén vůbec ukazuje. Továrny chtějí průmyslovou zónu,
-              obchody komerční.
+              obchody komerční. Nákup i stavba odečtou peníze z tvé pokladny
+              a zmizí z ekonomiky světa (proto ceny neklesají donekonečna).
             </p>
           </div>
         </aside>

@@ -22,6 +22,7 @@ export type AccountKind =
   | 'sink_plot_rent' | 'sink_property_tax' | 'sink_wages' | 'sink_upkeep'
   | 'sink_hq_overhead' | 'sink_capex' | 'sink_demolition' | 'sink_research'
   | 'sink_wealth_tax' | 'sink_auction_burn' | 'sink_loan_interest'
+  | 'sink_land_purchase'
 
 export type MoneyFlow = 'faucet' | 'sink' | 'transfer' | 'internal'
 

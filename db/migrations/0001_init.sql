@@ -96,7 +96,8 @@ CREATE TYPE account_kind AS ENUM (
     'sink_research',
     'sink_wealth_tax',
     'sink_auction_burn',     -- 100 % spáleno ve státním tendru / sběratelské aukci
-    'sink_loan_interest'
+    'sink_loan_interest',
+    'sink_land_purchase'     -- nákup pozemku od světa (peníze mizí z ekonomiky)
 );
 
 CREATE TYPE money_flow AS ENUM ('faucet', 'sink', 'transfer', 'internal');
@@ -878,7 +879,7 @@ CREATE TABLE journal_entries (
         'starting_grant','market_trade','exchange_fee','retail_sale','retail_tax',
         'state_purchase','building_capex','upgrade_capex','demolition','upkeep',
         'plot_rent','property_tax','wages','hq_overhead','transport','storage_rent',
-        'research','wealth_tax','auction_burn','loan_interest','player_transfer',
+        'research','wealth_tax','auction_burn','loan_interest','player_transfer','land_purchase',
         'escrow_lock','escrow_release','adjustment'
     ))
 );

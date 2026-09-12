@@ -134,7 +134,8 @@ N^0,45: ~10 % při 5 budovách, ~30 % při 50, ~50 % při 200.
 
 ## 4. Pozemky — nová ekonomická vrstva (ADR-001)
 
-288 pozemků na svět (mřížka 24×12), sedm typů:
+288 pozemků na svět (mřížka 24×12), sedm typů. **Revize Fáze 4B:** výchozí svět je
+800 pozemků (40×20, `WORLD_W`/`WORLD_H`); poměry níže platí jako zlomky plochy.
 
 | Typ | Počet | Nájem $/h | Co umožňuje |
 |---|---:|---:|---|

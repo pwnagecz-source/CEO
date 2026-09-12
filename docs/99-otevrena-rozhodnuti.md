@@ -8,6 +8,11 @@ Jakmile se rozhodne, přesune se do `docs/adr/NNN-*.md` s datem a zdůvodněním
 ## ADR-001 — Prostorovost: mapa a pozemky vs. abstraktní ekonomika
 **Stav:** ✅ ROZHODNUTO 2026-09-12 → **B) Omezená mřížka pozemků**
 **Rozhodnutí:** 288 pozemků na svět (mřížka 24×12), 7 typů, depositní pozemky gates těžbu.
+
+**Revize (Fáze 4B):** výchozí svět je větší — 800 pozemků (mřížka 40×20), rozměr je
+laditelný přes `WORLD_W`/`WORLD_H`. Ekonomické poměry biomů jsou počítané jako
+zlomky plochy, takže character světa se s velikostí nemění; původních 288 zůstává
+platné minimum pro_balance model_.
 **Důsledek:** nová ekonomická vrstva — dražby, nájem, daň z nemovitosti, adjacency, sekundární
 trh s půdou. Doprava v MVP = paušál podle manhattan vzdálenosti (žádné pathfinding).
 **Detail:** `docs/10-ekonomika-core-loop.md` §4.

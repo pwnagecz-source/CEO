@@ -13,7 +13,11 @@ let svg = renderToStaticMarkup(
   <WorldMap map={map} myCompanyId="1" selectedPlotId={null} onSelectPlot={() => {}} />,
 )
 
-// ImageMagick potřebuje explicitní width/height; dopočteme z viewBox.
+// WorldMap vrací obal <div class="map-stage"> (ovládací prvky kamery); pro
+// rasterizaci potřebujeme čisté <svg>.
+svg = svg.slice(svg.indexOf('<svg'), svg.lastIndexOf('</svg>') + '</svg>'.length)
+
+// Rasterizér potřebuje explicitní width/height; dopočteme z viewBox.
 const m = /viewBox="([-\d.]+) ([-\d.]+) ([\d.]+) ([\d.]+)"/.exec(svg)
 if (m) {
   const [, , , w, h] = m.map(Number)

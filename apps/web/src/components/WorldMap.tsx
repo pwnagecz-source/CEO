@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MapData, MapPlot } from '../api'
 import {
   FLOOR_H, TILE_H, TILE_W, diamond, diamondPoints, gridBounds, ownerColor, poly,
   tileCenter, up, type Pt,
 } from '../game/iso'
-import { STATUS_GLOW, skinFor, terrainFor } from '../game/art'
+import { STATUS_GLOW, shade, skinFor, terrainFor } from '../game/art'
 
 type Props = {
   map: MapData | null
@@ -40,7 +40,7 @@ function TerrainDetail({ plot, c }: { plot: MapPlot; c: Pt }) {
             <g key={i} transform={`translate(${c.x + ox},${c.y + oy})`}>
               <rect x={-0.8} y={-h * 0.35} width={1.6} height={h * 0.4} fill="#4a3a26" />
               <polygon points={`0,${-h} ${4.5},${-h * 0.3} ${-4.5},${-h * 0.3}`} fill="#2c5236" />
-              <polygon points={`0,${-h * 0.78} ${3.6},${-h * 0.12} ${-3.6},${-h * 0.12}`} fill="#356243" />
+              <polygon points={`0,${-h * 0.78} ${3.6},${-h * 0.12} ${-3.6},${-h * 0.12}`} fill="#3d7a4f" />
             </g>
           )
         })}
@@ -68,19 +68,33 @@ function TerrainDetail({ plot, c }: { plot: MapPlot; c: Pt }) {
   if (t === 'water') {
     return (
       <g opacity={0.5}>
-        <path
-          d={`M ${c.x - 12} ${c.y} q 6 -3 12 0 q 6 3 12 0`}
-          stroke="#7fb2d9" strokeWidth={1} fill="none"
-        />
-        <path
-          d={`M ${c.x - 8} ${c.y + 6} q 5 -2.5 10 0`}
-          stroke="#6ea3c9" strokeWidth={0.8} fill="none"
-        />
+        <path d={`M ${c.x - 12} ${c.y} q 6 -3 12 0 q 6 3 12 0`} stroke="#8fc4e8" strokeWidth={1} fill="none" />
+        <path d={`M ${c.x - 8} ${c.y + 6} q 5 -2.5 10 0`} stroke="#6ea3c9" strokeWidth={0.8} fill="none" />
+      </g>
+    )
+  }
+  if (t === 'commercial' || t === 'civic') {
+    // dlažba/centrum: jemná tečka, aby plocha nebyla mrtvá
+    return <circle cx={c.x} cy={c.y} r={1.4} fill="#ffffff" opacity={0.12} />
+  }
+  if (t === 'industrial' || t === 'utility') {
+    // řídký štěrk/tráva: velké plochy jinak působí jako mrtvá barva
+    if (hash2(plot.x, plot.y, 41) > 0.55) return null
+    return (
+      <g opacity={0.5}>
+        {Array.from({ length: 2 }, (_, i) => {
+          const ox = (hash2(plot.x, plot.y, i + 51) - 0.5) * TILE_W * 0.5
+          const oy = (hash2(plot.x, plot.y, i + 61) - 0.5) * TILE_H * 0.5
+          return <circle key={i} cx={c.x + ox} cy={c.y + oy} r={0.9} fill={t === 'utility' ? '#b9a8e8' : '#8a9384'} opacity={0.5} />
+        })}
       </g>
     )
   }
   return null
 }
+
+/** Průmyslové obory, kterým rostou z komína (a občas i kouř). */
+const CHIMNEY = new Set(['metallurgy', 'energy', 'mining', 'construction', 'manufacturing'])
 
 /** Izometrická budova: hranol s nasvícenými stěnami a střechou. */
 function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
@@ -89,8 +103,8 @@ function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
   const level = plot.b_level ?? 1
   // Výška roste s tierem (větší provozy) i úrovní — ale s stropem, ať mapa
   // nepřeroste sama sebe.
-  const hgt = Math.min(64, 16 + tier * 7 + (level - 1) * FLOOR_H * 0.6)
-  const inset = 7 // budova nestojí až po okraj dlaždice
+  const hgt = Math.min(68, 18 + tier * 8 + (level - 1) * FLOOR_H * 0.6)
+  const inset = 6 // budova nestojí až po okraj dlaždice
   const g = diamondPoints(c.x, c.y, TILE_W - inset * 2, TILE_H - inset)
   const glow = plot.b_status ? STATUS_GLOW[plot.b_status] : undefined
 
@@ -102,12 +116,12 @@ function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
     <g>
       {/* vržený stín */}
       <polygon points={diamond(c.x + 3, c.y + 3, TILE_W - inset, TILE_H - inset * 0.6)}
-               fill="#000" opacity={0.22} />
+               fill="#000" opacity={0.24} />
       <polygon points={leftWall} fill={skin.wallDark} />
       <polygon points={rightWall} fill={skin.wall} />
       <polygon points={roof} fill={skin.roof} />
       {/* hrana střechy pro čitelnost */}
-      <polygon points={roof} fill="none" stroke="#00000033" strokeWidth={0.6} />
+      <polygon points={roof} fill="none" stroke="#00000040" strokeWidth={0.6} />
 
       {/* okna jako pásy lícující s pravou (nasvícenou) stěnou */}
       {Array.from({ length: Math.min(3, level) }, (_, i) => {
@@ -123,7 +137,7 @@ function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
               up(lerp(g.bottom, g.right, 0.8), y0 + 3),
               up(lerp(g.bottom, g.right, 0.2), y0 + 3),
             ])}
-            fill={lit ? '#ffe9a8' : '#242a33'}
+            fill={lit ? '#ffe9a8' : '#232a35'}
             opacity={0.92}
           />
         )
@@ -137,7 +151,7 @@ function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
               up(g.bottom, hgt * 0.55), up(g.right, hgt * 0.55),
               up(g.right, hgt * 0.55 + 5), up(g.bottom, hgt * 0.55 + 5),
             ])}
-            fill="#e8e2d4"
+            fill="#eee7d8"
           />
           <polygon
             points={poly([
@@ -149,8 +163,8 @@ function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
         </g>
       )}
 
-      {/* komín / větrák pro průmysl a energii */}
-      {(plot.b_industry === 'metallurgy' || plot.b_industry === 'energy') && (
+      {/* komín / větrák pro těžký průmysl */}
+      {plot.b_industry && CHIMNEY.has(plot.b_industry) && (
         <g>
           <rect x={c.x - 2} y={c.y - hgt - 9} width={4} height={10} fill={skin.wallDark} />
           {plot.b_status === 'producing' && (
@@ -182,17 +196,99 @@ function Building({ plot, c }: { plot: MapPlot; c: Pt }) {
   )
 }
 
+type TileProps = {
+  plot: MapPlot
+  myCompanyId: string | null
+  isSel: boolean
+  isHover: boolean
+  onSelect: (p: MapPlot) => void
+  onHover: (id: string | null) => void
+}
+
+/**
+ * Jedna dlaždice. `memo` je tu kvůli výkonu: svět má 800 pozemků a hover by
+ * jinak překreslil celou scénu při každém pohybu myši. Memoizace znamená, že
+ * při hoveru se přepočítají jen dvě dlaždice (stará a nová).
+ */
+const Tile = memo(function Tile({ plot, myCompanyId, isSel, isHover, onSelect, onHover }: TileProps) {
+  const c = tileCenter(plot.x, plot.y)
+  const owned = plot.owner_id !== null
+  const terr = terrainFor(plot.type, owned)
+  const isMine = owned && plot.owner_id === myCompanyId
+  const oc = ownerColor(plot.owner_id)
+
+  return (
+    <g
+      className="tile"
+      onClick={() => onSelect(plot)}
+      onMouseEnter={() => onHover(plot.id)}
+      onMouseLeave={() => onHover(null)}
+    >
+      <title>
+        {`[${plot.x}, ${plot.y}] ${terr.label}` +
+         (owned ? ` · ${plot.owner_name}${isMine ? ' (ty)' : ''}` : ' · volný pozemek') +
+         (plot.b_name ? `\n${plot.b_name} · lvl ${plot.b_level} · ${plot.b_status}` : '')}
+      </title>
+
+      {/* podklad dlaždice — jemný jitter světlosti, aby velké plochy nežily
+          jako jedna mrtvá barva, ale jako krajina */}
+      <polygon points={diamond(c.x, c.y)} fill={shade(terr.fill, 0.94 + hash2(plot.x, plot.y, 31) * 0.12)} />
+      {/* parcela: sotva viditelný obrys, ať je čitelná struktura pozemků */}
+      <polygon
+        points={diamond(c.x, c.y, TILE_W - 6, TILE_H - 3)}
+        fill="none" stroke="#ffffff" strokeOpacity={0.055} strokeWidth={0.6}
+      />
+      {/* nasvícená horní hrana */}
+      <polyline
+        points={`${c.x - TILE_W / 2},${c.y} ${c.x},${c.y - TILE_H / 2} ${c.x + TILE_W / 2},${c.y}`}
+        fill="none" stroke={terr.edge} strokeWidth={1}
+      />
+      <TerrainDetail plot={plot} c={c} />
+
+      {/* vlastnictví */}
+      {owned && (
+        <polygon
+          points={diamond(c.x, c.y, TILE_W - 4, TILE_H - 2)}
+          fill="none" stroke={oc} strokeWidth={isMine ? 1.6 : 1}
+          opacity={isMine ? 0.95 : 0.5}
+        />
+      )}
+
+      {/* budova */}
+      {plot.b_id && <Building plot={plot} c={c} />}
+
+      {/* výběr / hover */}
+      {(isSel || isHover) && (
+        <polygon
+          points={diamond(c.x, c.y)}
+          fill={isSel ? '#58a6ff26' : '#ffffff0d'}
+          stroke={isSel ? '#58a6ff' : '#ffffff66'}
+          strokeWidth={isSel ? 1.8 : 1}
+        />
+      )}
+    </g>
+  )
+})
+
+type View = { x: number; y: number; w: number; h: number }
+
 /**
  * Izometrická mapa světa — herní pohled.
  *
  * Painter's algorithm: dlaždice i budovy kreslíme seřazené podle hloubky (x+y),
  * takže bližší objekty správně překrývají vzdálenější a budovy „stojí“ za sebou.
+ *
+ * K velkému světu (40×20 = 800 pozemků) patří ovládání kamery: kolečko = zoom
+ * na kurzor, tažení = posun, dvojklik / tlačítko ⤢ = celý svět.
  */
 export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlot }: Props) {
   const [hoverId, setHoverId] = useState<string | null>(null)
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  const [view, setView] = useState<View | null>(null)
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
 
   const bounds = useMemo(
-    () => (map ? gridBounds(map.grid.w, map.grid.h) : gridBounds(24, 12)),
+    () => (map ? gridBounds(map.grid.w, map.grid.h) : gridBounds(40, 20)),
     [map],
   )
 
@@ -201,80 +297,109 @@ export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlo
     [map],
   )
 
+  // Když se změní svět (reset / jiná mapa), skoč zpět na celou mapu.
+  useEffect(() => {
+    setView({ x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height })
+  }, [bounds.x, bounds.y, bounds.width, bounds.height])
+
+  const onHover = useCallback((id: string | null) => setHoverId(id), [])
+  const onSelect = useCallback((p: MapPlot) => onSelectPlot(p), [onSelectPlot])
+
+  const v = view ?? { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height }
+  const minW = bounds.width / 8   // maximální přiblížení
+  const maxW = bounds.width       // maximální oddálení = celý svět
+
+  /** Klientské souřadnice myši → souřadnice v SVG (přes inverzní CTM). */
+  function toSvg(e: { clientX: number; clientY: number }): Pt | null {
+    const svg = svgRef.current
+    const ctm = svg?.getScreenCTM()
+    if (!svg || !ctm) return null
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse())
+    return { x: p.x, y: p.y }
+  }
+
+  /** Zoom na bod pod kurzorem; poměr stran viewBoxu zůstává, jen se škáluje. */
+  function zoomAt(factor: number, focus?: Pt | null) {
+    const nw = Math.max(minW, Math.min(maxW, v.w * factor))
+    if (nw === v.w) return
+    const f = focus ?? { x: v.x + v.w / 2, y: v.y + v.h / 2 }
+    const k = nw / v.w
+    setView({ x: f.x - (f.x - v.x) * k, y: f.y - (f.y - v.y) * k, w: nw, h: v.h * k })
+  }
+
+  function resetView() {
+    setView({ x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height })
+  }
+
+  // Kolečko myši: React má wheel listener pasivní, takže preventDefault musí
+  // jít přes nativní listener — jinak by stránka při zoomu skákala.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      zoomAt(e.deltaY > 0 ? 1.16 : 1 / 1.16, toSvg(e))
+    }
+    svg.addEventListener('wheel', handler, { passive: false })
+    return () => svg.removeEventListener('wheel', handler)
+  })
+
   if (!map) return <div className="empty">načítám mapu světa…</div>
 
   return (
-    <svg
-      viewBox={`${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`}
-      className="worldmap"
-      role="img"
-      aria-label="Izometrická mapa světa"
-      onClick={(e) => { if (e.target === e.currentTarget) onSelectPlot(null) }}
-    >
-      <defs>
-        <linearGradient id="skyfade" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#141a24" />
-          <stop offset="100%" stopColor="#0b0e13" />
-        </linearGradient>
-      </defs>
-      <rect x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} fill="url(#skyfade)" />
+    <div className="map-stage">
+      <svg
+        ref={svgRef}
+        viewBox={`${v.x} ${v.y} ${v.w} ${v.h}`}
+        className="worldmap"
+        role="img"
+        aria-label="Izometrická mapa světa"
+        onDoubleClick={resetView}
+        onPointerDown={(e) => {
+          const p = toSvg(e)
+          if (p) drag.current = { x: e.clientX, y: e.clientY, vx: v.x, vy: v.y }
+        }}
+        onPointerMove={(e) => {
+          if (!drag.current || !svgRef.current) return
+          const r = svgRef.current.getBoundingClientRect()
+          const scale = v.w / r.width
+          setView({
+            ...v,
+            x: drag.current.vx - (e.clientX - drag.current.x) * scale,
+            y: drag.current.vy - (e.clientY - drag.current.y) * scale,
+          })
+        }}
+        onPointerUp={() => { drag.current = null }}
+        onPointerLeave={() => { drag.current = null }}
+        onClick={(e) => { if (e.target === e.currentTarget) onSelectPlot(null) }}
+      >
+        <defs>
+          <linearGradient id="skyfade" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#16233a" />
+            <stop offset="55%" stopColor="#0d1524" />
+            <stop offset="100%" stopColor="#080d16" />
+          </linearGradient>
+        </defs>
+        <rect x={v.x} y={v.y} width={v.w} height={v.h} fill="url(#skyfade)" />
 
-      {ordered.map((p) => {
-        const c = tileCenter(p.x, p.y)
-        const owned = p.owner_id !== null
-        const terr = terrainFor(p.type, owned)
-        const isMine = owned && p.owner_id === myCompanyId
-        const isSel = p.id === selectedPlotId
-        const isHover = p.id === hoverId
-        const oc = ownerColor(p.owner_id)
-
-        return (
-          <g
+        {ordered.map((p) => (
+          <Tile
             key={p.id}
-            className="tile"
-            onClick={() => onSelectPlot(p)}
-            onMouseEnter={() => setHoverId(p.id)}
-            onMouseLeave={() => setHoverId(null)}
-          >
-            <title>
-              {`[${p.x}, ${p.y}] ${terr.label}` +
-               (owned ? ` · ${p.owner_name}${isMine ? ' (ty)' : ''}` : ' · volný pozemek') +
-               (p.b_name ? `\n${p.b_name} · lvl ${p.b_level} · ${p.b_status}` : '')}
-            </title>
+            plot={p}
+            myCompanyId={myCompanyId}
+            isSel={p.id === selectedPlotId}
+            isHover={p.id === hoverId}
+            onSelect={onSelect}
+            onHover={onHover}
+          />
+        ))}
+      </svg>
 
-            {/* podklad dlaždice */}
-            <polygon points={diamond(c.x, c.y)} fill={terr.fill} />
-            {/* nasvícená horní hrana */}
-            <polyline
-              points={`${c.x - TILE_W / 2},${c.y} ${c.x},${c.y - TILE_H / 2} ${c.x + TILE_W / 2},${c.y}`}
-              fill="none" stroke={terr.edge} strokeWidth={1}
-            />
-            <TerrainDetail plot={p} c={c} />
-
-            {/* vlastnictví */}
-            {owned && (
-              <polygon
-                points={diamond(c.x, c.y, TILE_W - 4, TILE_H - 2)}
-                fill="none" stroke={oc} strokeWidth={isMine ? 1.6 : 1}
-                opacity={isMine ? 0.95 : 0.5}
-              />
-            )}
-
-            {/* budova */}
-            {p.b_id && <Building plot={p} c={c} />}
-
-            {/* výběr / hover */}
-            {(isSel || isHover) && (
-              <polygon
-                points={diamond(c.x, c.y)}
-                fill={isSel ? '#4ea8ff22' : '#ffffff0d'}
-                stroke={isSel ? '#4ea8ff' : '#ffffff66'}
-                strokeWidth={isSel ? 1.8 : 1}
-              />
-            )}
-          </g>
-        )
-      })}
-    </svg>
+      <div className="map-tools">
+        <button className="map-tool" title="Přiblížit" onClick={() => zoomAt(1 / 1.4)}>＋</button>
+        <button className="map-tool" title="Oddálit" onClick={() => zoomAt(1.4)}>−</button>
+        <button className="map-tool" title="Celý svět (nebo dvojklik na mapu)" onClick={resetView}>⤢</button>
+      </div>
+    </div>
   )
 }

@@ -34,6 +34,10 @@ type Seed = {
   buildings: SeedBuilding[]
 }
 
+/** Rozměr světa. Default výrazně větší než původních 24×12; přes env laditelné. */
+const GRID_W = Number(process.env.WORLD_W ?? 40)
+const GRID_H = Number(process.env.WORLD_H ?? 20)
+
 const WORLD_CODE = process.env.WORLD_CODE ?? 'dev-s01'
 
 const INDUSTRIES: Array<[string, string, number]> = [
@@ -81,11 +85,21 @@ function tickSizeFor(price: number): number {
 }
 
 /**
- * Deterministické rozložení mřížky 24×12. Deposity jsou shluknuté, aby adjacency
+ * Deterministické rozložení mřížky (výchozí 40×20). Deposity jsou shluknuté, aby adjacency
  * měla smysl (pila vedle lesního pozemku, huť vedle dolu) a aby spekulace s půdou
  * byla možná. Žádná náhoda → stejný svět při každém seedu.
  */
-function layoutPlots(w: number, h: number, counts: Record<string, number>) {
+/**
+ * Rozvržení biomů v libovolné velikosti mřížky.
+ *
+ * Původní verze měla pevné kvóty naladěné pro 24×12; při větší mapě by les
+ * „nedosáhl“ na svou kvótu (levý sloupec má jen 3×h dlaždic) a zbytek by
+ * zdegeneroval na průmysl. Proto pracujeme s POMĚRY plochy a šířky pásů
+ * odvozujeme od rozměrů — svět si drží charakter v jakékoli velikosti.
+ */
+function layoutPlots(w: number, h: number) {
+  const total = w * h
+  const frac = (f: number) => Math.round(total * f)
   const cells: Array<{ x: number; y: number; type: string }> = []
   const used = new Set<string>()
   const take = (pred: (x: number, y: number) => boolean, type: string, n: number) => {
@@ -101,22 +115,28 @@ function layoutPlots(w: number, h: number, counts: Record<string, number>) {
     }
     return placed
   }
-  // voda = spodní pás (řeka), les = levý sloupec, důl = pravý sloupec
-  take((_x, y) => y >= h - 2, 'water', counts.water ?? 0)
-  take((x) => x <= 2, 'forest', counts.forest ?? 0)
-  take((x, y) => x >= w - 4 && y < h - 2, 'mine', counts.mine ?? 0)
-  take((x, y) => (x + y) % 7 === 3, 'utility', counts.utility ?? 0)
-  // komerční = centrum, průmysl = zbytek, civiční = střed města
-  take((x, y) => Math.abs(x - w / 2) <= 4 && Math.abs(y - h / 2) <= 2,
-       'commercial', counts.commercial ?? 0)
-  take((x, y) => x === Math.floor(w / 2) && y === Math.floor(h / 2),
-       'civic', counts.civic ?? 0)
-  take(() => true, 'industrial', counts.industrial ?? 0)
-  // co zbylo (když došly kvóty)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const k = `${x},${y}`
-    if (!used.has(k)) cells.push({ x, y, type: 'industrial' })
-  }
+
+  const waterRows = Math.max(2, Math.round(h * 0.14))   // řeka dole
+  const forestCols = Math.max(3, Math.round(w * 0.13))  // les vlevo
+  const mineCols = Math.max(4, Math.round(w * 0.13))    // důl vpravo
+
+  take((_x, y) => y >= h - waterRows, 'water', frac(0.07))
+  take((x) => x < forestCols, 'forest', frac(0.13))
+  take((x, y) => x >= w - mineCols && y < h - waterRows, 'mine', frac(0.11))
+  // Energetické koridory: dva svislé pásy po dvou dlaždicích, které lemují
+  // město. (Původní tečkovaný vzor `(x+y)%7` vypadal na mapě jako chyba.)
+  const u1 = Math.round(w * 0.24), u2 = Math.round(w * 0.73)
+  take((x, y) =>
+    (x === u1 || x === u1 + 1 || x === u2 || x === u2 + 1) && y < h - waterRows,
+    'utility', total)
+
+  // komerce = centrum města, civic = malé jádro, průmysl = všechno ostatní
+  const cw = Math.round(w * 0.30), ch = Math.round(h * 0.34)
+  take((x, y) => Math.abs(x - w / 2) <= cw / 2 && Math.abs(y - h / 2) <= ch / 2,
+       'commercial', frac(0.15))
+  take((x, y) => Math.abs(x - w / 2) <= 1 && Math.abs(y - h / 2) <= 1, 'civic', frac(0.02))
+  take(() => true, 'industrial', total)
+
   return cells
 }
 
@@ -133,9 +153,9 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
     d,
     `INSERT INTO worlds (code, name, season_no, status, starts_at, ends_at,
                          plot_grid_w, plot_grid_h, starting_capital)
-     VALUES ($1,$2,1,'active',$3,$4,24,12,25000)
+     VALUES ($1,$2,1,'active',$3,$4,$5,$6,25000)
      RETURNING id`,
-    [WORLD_CODE, 'Vývojový svět S01', now, ends],
+    [WORLD_CODE, 'Vývojový svět S01', now, ends, GRID_W, GRID_H],
   )
   const worldId = Number(world!.id)
 
@@ -226,7 +246,7 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
   }
 
   // ---- pozemky --------------------------------------------------------------
-  const cells = layoutPlots(24, 12, raw.plot_count)
+  const cells = layoutPlots(GRID_W, GRID_H)
   for (const c of cells) {
     const rent = raw.plot_rent[c.type] ?? 0
     const value = raw.plot_value[c.type] ?? 0
@@ -289,10 +309,10 @@ type DemoCo = {
  * Kotvy jsou zvolené podle rozmístění biomů: les vlevo, důl vpravo, voda dole.
  */
 const HOME_ANCHORS = [
-  { x: 4, y: 4 },   // Tvá Firma — les + průmysl vlevo nahoře
-  { x: 4, y: 8 },   // Borealis Woods — les vlevo dole
-  { x: 19, y: 4 },  // Krupp Metall — důl vpravo
-  { x: 12, y: 9 },  // Panetteria Verde — voda/farma dole
+  { x: Math.round(GRID_W * 0.16), y: Math.round(GRID_H * 0.28) },  // Tvá Firma — les
+  { x: Math.round(GRID_W * 0.16), y: Math.round(GRID_H * 0.60) },  // Borealis — les
+  { x: Math.round(GRID_W * 0.84), y: Math.round(GRID_H * 0.30) },  // Krupp — důl
+  { x: Math.round(GRID_W * 0.50), y: GRID_H - 2 },                 // Panetteria — voda
 ]
 
 const DEMO_COMPANIES: DemoCo[] = [
