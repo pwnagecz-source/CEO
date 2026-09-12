@@ -219,6 +219,19 @@ await post('/clock', { speed: 1 })
 const mapd = await j('/map')
 check('mapa má státní silnice', mapd.plots.some((p) => p.type === 'road'), true)
 check('mapa hlásí napojení', mapd.plots.some((p) => p.connected === true), true)
+{
+  const byP = new Map(mapd.plots.map((p) => [`${p.x},${p.y}`, p]))
+  const nbr4 = (p) => [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    .some(([dx, dy]) => byP.get(`${p.x + dx},${p.y + dy}`)?.type === 'water')
+  const shore = mapd.plots.find((p) => p.type !== 'water' && p.type !== 'road' && nbr4(p))
+  check('nábřeží je napojené zdarma (řeka = dopravní síť)', shore?.connected === true, true)
+  const dry = mapd.plots.find((p) => p.owner_id === '1' && !p.b_code
+    && p.type !== 'water' && !nbr4(p))
+  if (dry) {
+    const hb = await post(`/plots/${dry.id}/build`, { companyId: 1, buildingCode: 'harbor' })
+    check('přístav mimo vodu → 422', hb.status, 422)
+  }
+}
 check('audit PASS po Fázi D', (await j('/audit')).verdict, 'PASS')
 
 console.log('\n────────────────────────────────────────────────────────────')

@@ -119,7 +119,7 @@ export async function runTick(d: Db, worldId: number) {
     d,
     `SELECT b.company_id::int AS company_id, bt.base_storage::float8 AS storage
        FROM buildings b JOIN building_types bt ON bt.id = b.type_id
-      WHERE b.world_id=$1 AND bt.code='warehouse'`,
+      WHERE b.world_id=$1 AND bt.code IN ('warehouse','harbor')`,
     [worldId],
   )
   const whExtra = new Map<number, number>()

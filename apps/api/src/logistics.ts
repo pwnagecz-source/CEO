@@ -38,8 +38,8 @@ async function roadTiles(d: Db, worldId: number): Promise<RoadTile[]> {
   return many<RoadTile>(
     d,
     `SELECT p.id::int AS id, p.x::int AS x, p.y::int AS y,
-            (p.plot_type = 'road') AS main,
-            (p.plot_type = 'road' OR bt.code = 'road') AS is_road
+            (p.plot_type = 'road' OR p.plot_type = 'water') AS main,
+            (p.plot_type = 'road' OR p.plot_type = 'water' OR bt.code = 'road') AS is_road
        FROM plots p
        LEFT JOIN buildings b ON b.plot_id = p.id
        LEFT JOIN building_types bt ON bt.id = b.type_id
@@ -51,7 +51,9 @@ async function roadTiles(d: Db, worldId: number): Promise<RoadTile[]> {
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const
 
 /**
- * BFS ze všech státních tahů přes souvislé silniční dlaždice.
+ * BFS ze všech státních tahů A řek přes souvislé dopravní dlaždice.
+ * Řeka je přírodní dálnice: pozemek s vodou sousedící je napojený zdarma
+ * (nábřeží = prémiová logistická parcela, jako ve skutečném světě).
  * Vrací dlaždice, které jsou „napojené“ — a tedy i pozemky, jejichž
  * produkce má kudy odvážet.
  */

@@ -276,7 +276,19 @@ type View = { x: number; y: number; w: number; h: number }
 
 /* ── doprava: auta s modely, která opravdu jezdí po silnicích ─────────────── */
 
-type Route = { pts: Pt[]; cum: number[]; len: number }
+type Route = { pts: Pt[]; cum: number[]; len: number; kind: 'truck' | 'ship' }
+
+const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const
+
+function toRoute(pts: Pt[]): Route {
+  const cum = [0]
+  let len = 0
+  for (let i = 1; i < pts.length; i++) {
+    len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
+    cum.push(len)
+  }
+  return { pts, cum, len, kind: 'truck' }
+}
 
 /** Izometrická dodávka: stín + korba + kabina. Malá, ale čitelná i oddáleně. */
 function Truck({ g }: { g: React.RefObject<SVGGElement | null> }) {
@@ -349,20 +361,127 @@ function buildRoutes(map: MapData): Route[] {
       cur = parent.get(cur) ?? null
     }
     pts.reverse() // od hlavního tahu k budově
-    const cum = [0]
-    let len = 0
-    for (let i = 1; i < pts.length; i++) {
-      len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
-      cum.push(len)
+    const r = toRoute(pts)
+    if (r.len > 1) routes.push(r)
+  }
+  return routes
+}
+
+/** Nákladní loď: trup, paluba s kontejnery, kabina a brázda ve vodě. */
+function Ship({ g }: { g: React.RefObject<SVGGElement | null> }) {
+  return (
+    <g ref={g} style={{ willChange: 'transform' }}>
+      <ellipse cx={0} cy={2.5} rx={12} ry={4} fill="#000" opacity={0.22} />
+      {/* boky trupu */}
+      <polygon points="-11,-1 0,4.5 0,0 -11,-5.5" fill="#232c3a" />
+      <polygon points="0,4.5 11,-1 11,-5.5 0,0" fill="#35435a" />
+      {/* paluba */}
+      <polygon points="-11,-5.5 0,0 11,-5.5 0,-11" fill="#485872" />
+      {/* kontejnery */}
+      <polygon points="-5,-5 0,-2.5 3,-4 -2,-6.5" fill="#b06459" />
+      <polygon points="-5,-5 0,-2.5 0,-4.5 -5,-7" fill="#8a4d45" />
+      <polygon points="0,-2.5 3,-4 3,-6 0,-4.5" fill="#c97b6d" />
+      <polygon points="1,-6 4,-4.5 6,-5.5 3,-7" fill="#5a8f9c" />
+      {/* kabina na zádi */}
+      <polygon points="-9,-5.5 -6,-4 -6,-8 -9,-9.5" fill="#8fa2bd" />
+      <polygon points="-6,-4 -3,-5.5 -3,-9.5 -6,-8" fill="#b9c8dd" />
+      {/* brázda */}
+      <path d="M -14 1 q 5 4 10 3" stroke="#9fc7e8" strokeWidth={0.8} fill="none" opacity={0.45} />
+    </g>
+  )
+}
+
+/**
+ * Lodní trasy: řeky jsou souvislé vodní cesty. Pro dvě největší řeky
+ * spočteme „průměr“ (nejdelší rozumnou trasu) a po ní posíláme lodě;
+ * přístavy přidávají vlastní spoj od svého nábřeží ke vzdálenému konci řeky.
+ */
+function buildShipRoutes(map: MapData): Route[] {
+  const water = map.plots.filter((p) => p.type === 'water')
+  if (water.length === 0) return []
+  const byPos = new Map<string, MapPlot>()
+  for (const w of water) byPos.set(`${w.x},${w.y}`, w)
+
+  const bfs = (start: MapPlot) => {
+    const parent = new Map<string, string | null>([[`${start.x},${start.y}`, null]])
+    const dist = new Map<string, number>([[`${start.x},${start.y}`, 0]])
+    const q: MapPlot[] = [start]
+    let far = start
+    let farD = 0
+    while (q.length > 0) {
+      const t = q.shift()!
+      const d0 = dist.get(`${t.x},${t.y}`)!
+      if (d0 > farD) { farD = d0; far = t }
+      for (const [dx, dy] of N4) {
+        const k = `${t.x + dx},${t.y + dy}`
+        if (parent.has(k)) continue
+        const n = byPos.get(k)
+        if (n) { parent.set(k, `${t.x},${t.y}`); dist.set(k, d0 + 1); q.push(n) }
+      }
     }
-    if (len > 1) routes.push({ pts, cum, len })
+    return { far, parent }
+  }
+  const trace = (endKey: string, parent: Map<string, string | null>) => {
+    const pts: Pt[] = []
+    let cur: string | null = endKey
+    while (cur) {
+      const parts = cur.split(',')
+      pts.push(tileCenter(Number(parts[0]), Number(parts[1])))
+      cur = parent.get(cur) ?? null
+    }
+    return pts
+  }
+
+  // komponenty souvislosti vodní sítě
+  const seen = new Set<string>()
+  const comps: MapPlot[][] = []
+  for (const w of water) {
+    const k0 = `${w.x},${w.y}`
+    if (seen.has(k0)) continue
+    const comp: MapPlot[] = []
+    const q: MapPlot[] = [w]
+    seen.add(k0)
+    while (q.length > 0) {
+      const t = q.shift()!
+      comp.push(t)
+      for (const [dx, dy] of N4) {
+        const k = `${t.x + dx},${t.y + dy}`
+        if (seen.has(k)) continue
+        const n = byPos.get(k)
+        if (n) { seen.add(k); q.push(n) }
+      }
+    }
+    comps.push(comp)
+  }
+  comps.sort((a, b) => b.length - a.length)
+
+  const routes: Route[] = []
+  for (const comp of comps.slice(0, 2)) {
+    const { far } = bfs(comp[0])
+    const { far: end, parent } = bfs(far)
+    const r = toRoute(trace(`${end.x},${end.y}`, parent))
+    r.kind = 'ship'
+    if (r.len > 40) routes.push(r)
+  }
+  // přístavní spoj: od nábřeží přístavu ke vzdálenému konci řeky
+  for (const h of map.plots.filter((x) => x.b_code === 'harbor').slice(0, 4)) {
+    const entry = N4.map(([dx, dy]) => byPos.get(`${h.x + dx},${h.y + dy}`))
+      .find((n) => n !== undefined)
+    if (!entry) continue
+    const { far, parent } = bfs(entry)
+    const r = toRoute(trace(`${far.x},${far.y}`, parent))
+    r.kind = 'ship'
+    if (r.len > 20) routes.push(r)
   }
   return routes
 }
 
 /** Vrstva aut: rAF smyčka posouvá dodávky po trasách (ping-pong tam a zpět). */
 function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number }) {
-  const routes = useMemo(() => buildRoutes(map), [map])
+  const routes = useMemo(
+    () => [...buildRoutes(map), ...buildShipRoutes(map)],
+    [map],
+  )
   const refs = useRef<Array<React.RefObject<SVGGElement | null>>>([])
   refs.current = routes.map((_, i) => refs.current[i] ?? { current: null })
   const speedRef = useRef(clockSpeed)
@@ -375,11 +494,12 @@ function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number })
     const step = (now: number) => {
       const dt = now - last
       last = now
-      clock += dt * (0.00006 * speedRef.current)   // 0 = pauza → auta stojí
+      clock += dt * speedRef.current   // 0 = pauza → doprava stojí
       routes.forEach((r, i) => {
         const el = refs.current[i]?.current
         if (!el) return
-        const u = (clock + i * 0.37) % 2
+        const rate = r.kind === 'ship' ? 0.000028 : 0.00006
+        const u = (clock * rate + i * 0.37) % 2
         const t = u < 1 ? u : 2 - u
         const p = pointAt(r, t)
         el.setAttribute('transform', `translate(${p.x.toFixed(1)},${(p.y - 2).toFixed(1)})`)
@@ -393,7 +513,9 @@ function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number })
   if (routes.length === 0) return null
   return (
     <g className="traffic" pointerEvents="none">
-      {routes.map((_, i) => <Truck key={i} g={refs.current[i]} />)}
+      {routes.map((r, i) => (r.kind === 'ship'
+        ? <Ship key={i} g={refs.current[i]} />
+        : <Truck key={i} g={refs.current[i]} />))}
     </g>
   )
 }
@@ -434,6 +556,22 @@ export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlo
   const v = view ?? { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height }
   const minW = bounds.width / 8   // maximální přiblížení
   const maxW = bounds.width       // maximální oddálení = celý svět
+
+  // Viewport culling: svět má tisíce dlaždic, hráč jich vidí jen stovky.
+  // Převod rohů pohledu zpět na mřížku (u = x−y, v = x+y) + rezerva 2 dlaždice.
+  const visible = useMemo(() => {
+    const hw = TILE_W / 2
+    const hh = TILE_H / 2
+    const umin = v.x / hw
+    const umax = (v.x + v.w) / hw
+    const vmin = (v.y - 120) / hh   // rezerva pro výšku budov nad horizontem
+    const vmax = (v.y + v.h) / hh
+    const x0 = Math.floor((umin + vmin) / 2) - 2
+    const x1 = Math.ceil((umax + vmax) / 2) + 2
+    const y0 = Math.floor((vmin - umax) / 2) - 2
+    const y1 = Math.ceil((vmax - umin) / 2) + 2
+    return ordered.filter((pp) => pp.x >= x0 && pp.x <= x1 && pp.y >= y0 && pp.y <= y1)
+  }, [ordered, v.x, v.y, v.w, v.h])
 
   /** Klientské souřadnice myši → souřadnice v SVG (přes inverzní CTM). */
   function toSvg(e: { clientX: number; clientY: number }): Pt | null {
@@ -508,7 +646,7 @@ export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlo
         </defs>
         <rect x={v.x} y={v.y} width={v.w} height={v.h} fill="url(#skyfade)" />
 
-        {ordered.map((p) => (
+        {visible.map((p) => (
           <Tile
             key={p.id}
             plot={p}

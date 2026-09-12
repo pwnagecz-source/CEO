@@ -154,6 +154,12 @@ export default function CodexView({ recipes, inputs, catalog, onBack }: Props) {
               nejkratší trasu, vykoupí pozemky za 30 % odhadní ceny a postaví ji
               za poplatek 250 Kč/dlaždice. Čím dál od tahů stavíš, tím dráž.
             </p>
+            <p>
+              <strong>Řeka je dálnice zdarma:</strong> pozemek sousedící s vodou
+              je napojený sám od sebe. <strong>Přístav</strong> (900 Kč capex,
+              +1 000 skladu) postavíš jen u vody — lodě na řece vozí tvé zboží
+              a nábřežní parcely jsou proto dražší než vnitrozemí.
+            </p>
             <h2>Čas</h2>
             <p>
               Svět má viditelný čas: jeden tick = jedna herní hodina. Tlačítky

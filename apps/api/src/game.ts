@@ -148,10 +148,12 @@ export async function buyPlot(
 export async function buildBuilding(
   d: Db, worldId: number, companyId: number, plotId: number, buildingCode: string,
 ): Promise<{ buildingId: number; capex: number }> {
-  const plot = await one<{ id: string; status: string; type: string; owner: string | null }>(
+  const plot = await one<{
+    id: string; status: string; type: string; owner: string | null; x: number; y: number
+  }>(
     d,
     `SELECT id::text, status::text, plot_type::text AS type,
-            owner_company_id::text AS owner
+            owner_company_id::text AS owner, x::int, y::int
        FROM plots WHERE id=$1 AND world_id=$2`,
     [plotId, worldId],
   )
@@ -178,6 +180,19 @@ export async function buildBuilding(
   if (bt.req !== null && bt.req !== plot.type) {
     throw new MarketError(
       `${buildingCode} potřebuje terén „${bt.req}“, tohle je „${plot.type}“`, 'wrong_terrain')
+  }
+
+  if (buildingCode === 'harbor') {
+    const near = await one<{ ok: boolean }>(
+      d,
+      `SELECT EXISTS (SELECT 1 FROM plots n
+                       WHERE n.world_id=$2 AND n.plot_type='water'
+                         AND abs(n.x - $3) + abs(n.y - $4) = 1) AS ok`,
+      [plotId, worldId, Number(plot.x), Number(plot.y)],
+    )
+    if (!near?.ok) {
+      throw new MarketError('přístav musí stát na pozemku sousedícím s vodou', 'wrong_terrain')
+    }
   }
 
   const capex = round6(Number(bt.capex))

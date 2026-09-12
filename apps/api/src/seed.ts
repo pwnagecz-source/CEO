@@ -267,6 +267,8 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
       'Napojení na státní síť. Bez cesty k hlavnímu tahu produkce stojí.'],
     ['warehouse', 'Sklad', 'industrial', 1200, 3, 2500, 60,
       'Přidává skladovou kapacitu všem provozům firmy.'],
+    ['harbor', 'Přístav', null, 900, 2, 1000, 45,
+      'Staví se u vody: napojí firmu na říční síť a přidá sklad. Lodě vozí zdarma.'],
   ] as Array<[string, string, string | null, number, number, number, number, string]>) {
     const r = await one<{ id: string }>(
       d,

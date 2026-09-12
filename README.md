@@ -50,7 +50,7 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | **Herní pohled (výchozí):** izometrická mapa světa 64×32 s biomy, silniční sítí, jezdícími auty, budovami, vlastnictvím, zoomem a inspektorem; HUD s penězi, skladem a herním časem (⏸ 1× 2× 4×) | ✅ |
 | **Sandbox:** průvodce založením firmy (jméno → odvětví → pozemek → stavba), nákup volných pozemků a stavba budov přímo z mapy — vše přes podvojný ledger | ✅ |
 | **Fáze B:** produkční tick (výroba, údržby, retail, státní síť pro elektřinu), questový řetěz se 7 úkoly, progresivní odemykání Terminálu, „Prodat vše“ jedním klikem | ✅ |
-| **Fáze D:** logistika — státní silniční síť, napojení produkce (BFS), najatí stavebníci s výkupem tras, sklady, herní čas s pauzou/zrychlením a Kniha (kodex receptů a příručka) | ✅ |
+| **Fáze D:** logistika — státní silniční síť, napojení produkce (BFS), najatí stavebníci s výkupem tras, sklady, řeky jako vodní cesty + přístavy a lodě, herní čas s pauzou/zrychlením, Kniha (kodex receptů a příručka) a viewport culling mapy | ✅ |
 | Expertní terminál (volitelný, zúžený na obchodování): přehled trhu s hledáním, order book s hloubkou, zadávání příkazů s odhadem exekuce, moje příkazy, páska obchodů, stavová lišta invariantů | ✅ |
 | Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
 
@@ -92,7 +92,7 @@ scripts/dev.mjs         spustí API i web najednou
 | 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 4 uzamčena, 3 nová z modelových zjištění, 4 otevřená | 🔶 částečně |
 | 30 | `docs/30-matching-engine.md` | CLOB specifikace, pseudokód, race conditions, testy | ⬜ |
 | 40 | [Onboarding, questy a tick](docs/40-onboarding-questy.md) | questový řetěz, progresivní odemykání, produkční tick, státní síť | ✅ hotovo |
-| 50 | [Logistika, silnice a čas](docs/50-logistika-silnice-cas.md) | silniční síť, napojení produkce, stavební firmy, sklady, herní čas, kodex | ✅ hotovo |
+| 50 | [Logistika, silnice a čas](docs/50-logistika-silnice-cas.md) | silniční síť, napojení produkce, stavební firmy, sklady, lodě a vodní cesty, herní čas, kodex | ✅ hotovo |
 | 40 | `docs/40-tick-engine.md` | výroba, retail simulace, údržba, lazy evaluation | ⬜ |
 | 50 | `docs/50-realtime.md` | SSE/WS, event schéma, coalescing, reconnect | ⬜ |
 | 60 | `docs/60-mvp-sprint-plan.md` | rozpad na 2týdenní sprinty s akceptačními kritérii | ⬜ |

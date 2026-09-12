@@ -43,6 +43,27 @@ tím dráž** — mapa tím dostává ekonomickou geografii.
   čas; v pauze stojí. Simulace nákladů dopravy (`sink_transport`) je dál
   otevřená otázka — viz §5.
 
+### Lodě a vodní cesty
+
+- **Řeka je přírodní dopravní síť:** `roadNetwork` bere dlaždice `water` jako
+  navigovatelné „státní tahy“ — pozemek sousedící s vodou je napojený zdarma
+  (nábřeží = prémiová parcela, oceňuje ji trh, ne kód).
+- Budova **`harbor` (Přístav)**: capex 900, údržba 2/h, **+1 000 skladu**
+  (tick ji sčítá se sklady stejně jako `warehouse`). `buildBuilding` ji pustí
+  jen na pozemek se 4-sousední vodou, jinak `wrong_terrain`.
+- **Lodě** (`buildShipRoutes` ve WorldMap): pro dvě největší řeky spočteme
+  průměr (2× BFS) a každému přístavu trasu od jeho nábřeží ke vzdálenému konci
+  řeky (max. 4). Izometrický model: trup, paluba s kontejnery, kabina, brázda.
+  Lodě jedou ~2× pomaleji než dodávky; v pauze stojí s nimi.
+
+### Viewport culling
+
+Svět poroste nad 2 048 dlaždic, proto WorldMap kreslí jen okno viditelné
+pohledem: rohy viewBoxu převedeme inverzní izometrií zpět na mřížku
+(`u = x−y`, `v = x+y`) a filtrujeme `ordered` na obdélník + rezervu 2 dlaždice
+(nad horizontem dalších 120 px pro výškové budovy). Při plném oddálení se
+kreslí vše, při práci na detailu jen stovky uzlů.
+
 ## 4 · Herní čas (`worlds.sim_speed`, `worlds.sim_hours`)
 
 - Viditelný čas v HUD: **Den N · HH:00**; jeden tick = jedna herní hodina.
@@ -62,8 +83,6 @@ hrát jde bez ní, plánovat s ní.
 
 ## 6 · Otevřené otázky (→ [99](99-otevrena-rozhodnuti.md))
 
-- Auta jsou dekorace: cargo simulace (náklad, doby svozu, `sink_transport`)
-  a lodě po vodních trasách jsou další krok.
-- 2048 dlaždic v SVG je strop pohodlí; produkční mapa chce viewport culling
-  nebo dlaždící render.
+- Auta a lodě jsou dekorace: cargo simulace (náklad, doby svozu,
+  `sink_transport`) je další krok.
 - Silnice zatím nezvyšují hodnotu sousedních pozemků (adjacency bonus z doc 10).
