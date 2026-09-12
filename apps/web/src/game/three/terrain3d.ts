@@ -146,7 +146,8 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   for (let iy = 0; iy < rows - 1; iy++) {
     for (let ix = 0; ix < cols - 1; ix++) {
       const a = iy * cols + ix
-      idx.push(a, a + 1, a + cols, a + 1, a + cols + 1, a + cols)
+      // winding proti hodinám při pohledu shora (+Y) → normály nahoru
+      idx.push(a, a + cols, a + 1, a + 1, a + cols, a + cols + 1)
     }
   }
   const geo = new THREE.BufferGeometry()
