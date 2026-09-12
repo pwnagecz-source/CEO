@@ -46,8 +46,8 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | Kompletní DDL (125 statementů) — 26 tabulek, 13 enumů, podvojný ledger, triggery, audit funkce | ✅ běží na skutečném Postgresu |
 | Matching engine: CLOB, price-time priority, limit + market (IOC), escrow, maker/taker poplatky, anti-wash, idempotence, rušení příkazů | ✅ end-to-end otestováno |
 | Pět audit invariantů včetně makro identity `M2 ≡ ΔM` a hlídače úniku escrow | ✅ |
-| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 2048 pozemků (64×32), 4 demo firmy, 12 úvodních příkazů | ✅ |
-| **Herní pohled (výchozí):** izometrická mapa světa 64×32 s biomy, silniční sítí, jezdícími auty, budovami, vlastnictvím, zoomem a inspektorem; HUD s penězi, skladem a herním časem (⏸ 1× 2× 4×) | ✅ |
+| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 3200 pozemků (80×40), 4 demo firmy, 12 úvodních příkazů | ✅ |
+| **Herní pohled (výchozí):** 3D mapa světa 80×40 s reliéfem, animovanou vodou a horami za hranicí, silniční sítí, jezdícími auty, budovami, vlastnictvím, zoomem a inspektorem; HUD s penězi, skladem a herním časem (⏸ 1× 2× 4×) | ✅ |
 | **Sandbox:** průvodce založením firmy (jméno → odvětví → pozemek → stavba), nákup volných pozemků a stavba budov přímo z mapy — vše přes podvojný ledger | ✅ |
 | **Fáze B:** produkční tick (výroba, údržby, retail, státní síť pro elektřinu), questový řetěz se 7 úkoly, progresivní odemykání Terminálu, „Prodat vše“ jedním klikem | ✅ |
 | **Fáze D:** logistika — státní silniční síť, napojení produkce (BFS), najatí stavebníci s výkupem tras, sklady, řeky jako vodní cesty + přístavy a lodě, herní čas s pauzou/zrychlením, Kniha (kodex receptů a příručka) a viewport culling mapy | ✅ |

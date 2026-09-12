@@ -4,7 +4,7 @@
 
 ## 1 · Větší svět
 
-Výchozí mřížka je **64×32 = 2048 pozemků** (`WORLD_W`/`WORLD_H`). Poměry biomů
+Výchozí mřížka je **80×40 = 3200 pozemků** (dříve 64×32) (`WORLD_W`/`WORLD_H`). Poměry biomů
 jsou zlomky plochy, takže charakter světa se s velikostí nemění; silniční síť
 se generuje rozměrově (osy + okruh), ne natvrdo.
 

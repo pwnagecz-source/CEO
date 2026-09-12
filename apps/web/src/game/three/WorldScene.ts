@@ -217,6 +217,13 @@ export class WorldScene {
       this.plots.set(p.id, p)
       this.coordIndex.set(`${p.x},${p.y}`, p.id)
     }
+    if (this.terrain) {
+      this.terrain.ground.geometry.dispose()
+      this.terrain.water.geometry.dispose()
+      ;(this.terrain.water.material as THREE.Material).dispose()
+      ;(this.terrain.ground.material as THREE.Material).dispose()
+    }
+    this.terrain = null
     this.clearGroup(this.terrainGroup)
     this.clearGroup(this.roadGroup)
     for (const g of this.buildGroups.values()) this.disposeBuildingGroup(g)
@@ -592,7 +599,10 @@ export class WorldScene {
       g.remove(child)
       child.traverse((n) => {
         const m = n as THREE.Mesh
-        if (m.isMesh && m.geometry && !isCachedGeo(m.geometry)) m.geometry.dispose()
+        if (m.isMesh && m.geometry && !isCachedGeo(m.geometry)) {
+          if ((m as THREE.InstancedMesh).isInstancedMesh) (m as THREE.InstancedMesh).dispose()
+          m.geometry.dispose()
+        }
       })
     }
     if (removeSelf && g.parent) g.parent.remove(g)
