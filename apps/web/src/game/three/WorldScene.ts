@@ -15,9 +15,9 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import type { MapData, MapPlot, TransportRoute } from '../../api'
-import { FALLBACK_TERRAIN, TERRAIN } from '../art'
 import { ownerColor } from '../iso'
 import { buildBuilding, buildConstruction, type Anim } from './buildings3d'
+import { buildTerrain3d, WATER_Y, type TerrainBuild } from './terrain3d'
 import { makeShip, makeTruck } from './vehicles3d'
 import { TILE, box, isCachedGeo, mat, NIGHT_MATS } from './materials'
 
@@ -38,7 +38,6 @@ const hash2 = (x: number, y: number, s = 0) => {
 type Lane = { pts: THREE.Vector3[]; cum: number[]; len: number; kind: 'truck' | 'ship' }
 type Vehicle = { g: THREE.Group; lane: Lane; off: number; kind: 'truck' | 'ship' }
 
-const landMat = () => mat('#ffffff')
 const SMOKE_MAT = new THREE.MeshLambertMaterial({
   color: 0xbfc4cc, transparent: true, opacity: 0.32, depthWrite: false,
 })
@@ -78,7 +77,8 @@ export class WorldScene {
   private rootGroup = new THREE.Group()
   private buildGroups = new Map<string, THREE.Group>()
   private ownerGroups = new Map<string, THREE.Group>()
-  private pickMeshes: THREE.Mesh[] = []
+  private terrain: TerrainBuild | null = null
+  private coordIndex = new Map<string, string>()
   private selFrame: THREE.Group
   private hovFrame: THREE.Group
   private selId: string | null = null
@@ -109,7 +109,7 @@ export class WorldScene {
     container.appendChild(this.renderer.domElement)
 
     this.scene.background = this.bg
-    this.scene.fog = new THREE.Fog(this.bg.getHex(), 80, 230)
+    this.scene.fog = new THREE.Fog(this.bg.getHex(), 70, 215)
 
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 500)
     this.camera.position.set(34, 30, 34)
@@ -144,7 +144,7 @@ export class WorldScene {
     this.scene.add(this.sun.target)
 
     // podklad mimo herní mřížku
-    const outer = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), mat('#2c3a30'))
+    const outer = new THREE.Mesh(new THREE.PlaneGeometry(700, 700), mat('#3f6b41'))
     outer.rotation.x = -Math.PI / 2
     outer.position.y = -0.5
     outer.receiveShadow = true
@@ -192,8 +192,8 @@ export class WorldScene {
   }
 
   private clampTarget() {
-    const hx = (this.grid.w / 2) * TILE + 6
-    const hz = (this.grid.h / 2) * TILE + 6
+    const hx = (this.grid.w / 2) * TILE - TILE
+    const hz = (this.grid.h / 2) * TILE - TILE
     const t = this.controls.target
     t.x = Math.max(-hx, Math.min(hx, t.x))
     t.z = Math.max(-hz, Math.min(hz, t.z))
@@ -212,18 +212,24 @@ export class WorldScene {
   setMap(map: MapData) {
     this.grid = map.grid
     this.plots.clear()
-    for (const p of map.plots) this.plots.set(p.id, p)
+    this.coordIndex.clear()
+    for (const p of map.plots) {
+      this.plots.set(p.id, p)
+      this.coordIndex.set(`${p.x},${p.y}`, p.id)
+    }
     this.clearGroup(this.terrainGroup)
-    this.clearGroup(this.decoGroup)
     this.clearGroup(this.roadGroup)
     for (const g of this.buildGroups.values()) this.disposeBuildingGroup(g)
     this.buildGroups.clear()
     for (const g of this.ownerGroups.values()) this.clearGroup(g, true)
     this.ownerGroups.clear()
-    this.pickMeshes = []
 
-    this.buildTerrain(map)
-    this.buildDeco(map)
+    this.terrain = buildTerrain3d(map)
+    this.terrainGroup.add(this.terrain.ground, this.terrain.water, this.terrain.deco)
+    const sc = this.sun.shadow.camera
+    sc.left = -this.terrain.half.x - 14; sc.right = this.terrain.half.x + 14
+    sc.top = this.terrain.half.z + 14; sc.bottom = -this.terrain.half.z - 14
+    sc.updateProjectionMatrix()
     this.buildRoads(map)
     for (const p of map.plots) {
       if (p.b_id) this.addBuilding(p)
@@ -239,6 +245,7 @@ export class WorldScene {
     for (const p of changed) {
       const old = this.plots.get(p.id)
       this.plots.set(p.id, p)
+      this.coordIndex.set(`${p.x},${p.y}`, p.id)
       const wasRoad = old ? (old.type === 'road' || old.b_code === 'road') : false
       const isRoad = p.type === 'road' || p.b_code === 'road'
       if (wasRoad !== isRoad) roadsDirty = true
@@ -263,118 +270,6 @@ export class WorldScene {
     if (this.selId && !this.plots.get(this.selId)) this.setSelected(null)
   }
 
-  private buildTerrain(map: MapData) {
-    const byType = new Map<string, MapPlot[]>()
-    for (const p of map.plots) {
-      const k = p.type === 'road' ? 'unowned' : p.type
-      const arr = byType.get(k)
-      if (arr) arr.push(p); else byType.set(k, [p])
-    }
-    const geo = new THREE.BoxGeometry(TILE * 0.99, 0.14, TILE * 0.99)
-    geo.userData.cached = true
-    for (const [type, list] of byType) {
-      const water = type === 'water'
-      const m = new THREE.InstancedMesh(geo, landMat(), list.length)
-      m.receiveShadow = true
-      m.castShadow = false
-      const base = new THREE.Color((TERRAIN[type] ?? FALLBACK_TERRAIN).fill)
-      if (water) base.multiplyScalar(0.9)
-      const c = new THREE.Color()
-      const ids: string[] = []
-      list.forEach((p, i) => {
-        const pos = this.tilePos(p.x, p.y)
-        pos.y = water ? -0.22 : -0.07
-        m.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z))
-        const j = 0.92 + hash2(p.x, p.y, 3) * 0.16
-        c.copy(base).multiplyScalar(j)
-        m.setColorAt(i, c)
-        ids.push(p.id)
-      })
-      m.instanceMatrix.needsUpdate = true
-      if (m.instanceColor) m.instanceColor.needsUpdate = true
-      m.userData.plotIds = ids
-      this.terrainGroup.add(m)
-      this.pickMeshes.push(m)
-    }
-  }
-
-  private buildDeco(map: MapData) {
-    const trees: { x: number; z: number; s: number; r: number }[] = []
-    const rocks: { x: number; z: number; s: number; r: number }[] = []
-    for (const p of map.plots) {
-      if (p.b_id || p.owner_id) continue
-      if (p.type === 'forest') {
-        const n = Math.floor(hash2(p.x, p.y, 11) * 3)
-        for (let i = 0; i < n; i++) {
-          trees.push({
-            x: p.x + (hash2(p.x, p.y, 20 + i) - 0.5) * 0.8,
-            z: p.y + (hash2(p.x, p.y, 30 + i) - 0.5) * 0.8,
-            s: 0.75 + hash2(p.x, p.y, 40 + i) * 0.6,
-            r: hash2(p.x, p.y, 50 + i) * Math.PI,
-          })
-        }
-      } else if (p.type === 'mine') {
-        const n = Math.floor(hash2(p.x, p.y, 13) * 2.4)
-        for (let i = 0; i < n; i++) {
-          rocks.push({
-            x: p.x + (hash2(p.x, p.y, 60 + i) - 0.5) * 0.9,
-            z: p.y + (hash2(p.x, p.y, 70 + i) - 0.5) * 0.9,
-            s: 0.5 + hash2(p.x, p.y, 80 + i) * 0.7,
-            r: hash2(p.x, p.y, 90 + i) * Math.PI,
-          })
-        }
-      }
-    }
-    if (trees.length) {
-      const trunkGeo = new THREE.CylinderGeometry(0.05, 0.08, 0.3, 5)
-      const crownGeo = new THREE.ConeGeometry(0.3, 0.72, 6)
-      trunkGeo.userData.cached = true; crownGeo.userData.cached = true
-      const trunks = new THREE.InstancedMesh(trunkGeo, mat('#6b4c2c'), trees.length)
-      const crowns = new THREE.InstancedMesh(crownGeo, mat('#3f7d4c'), trees.length)
-      crowns.castShadow = true
-      const c = new THREE.Color()
-      trees.forEach((t, i) => {
-        const pos = this.tilePos(Math.round(t.x), Math.round(t.z))
-        const ox = (t.x - Math.round(t.x)) * TILE
-        const oz = (t.z - Math.round(t.z)) * TILE
-        const mtx = new THREE.Matrix4().compose(
-          new THREE.Vector3(pos.x + ox, 0.15 * t.s, pos.z + oz),
-          new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.r),
-          new THREE.Vector3(t.s, t.s, t.s),
-        )
-        trunks.setMatrixAt(i, mtx)
-        const mtx2 = mtx.clone()
-        mtx2.setPosition(pos.x + ox, 0.66 * t.s, pos.z + oz)
-        crowns.setMatrixAt(i, mtx2)
-        c.set('#3f7d4c').multiplyScalar(0.85 + hash2(i, 7, 1) * 0.35)
-        crowns.setColorAt(i, c)
-      })
-      trunks.instanceMatrix.needsUpdate = true
-      crowns.instanceMatrix.needsUpdate = true
-      if (crowns.instanceColor) crowns.instanceColor.needsUpdate = true
-      this.decoGroup.add(trunks, crowns)
-    }
-    if (rocks.length) {
-      const rockGeo = new THREE.DodecahedronGeometry(0.16, 0)
-      rockGeo.userData.cached = true
-      const rm = new THREE.InstancedMesh(rockGeo, mat('#847a6c'), rocks.length)
-      rm.castShadow = true
-      rocks.forEach((r, i) => {
-        const pos = this.tilePos(Math.round(r.x), Math.round(r.z))
-        const ox = (r.x - Math.round(r.x)) * TILE
-        const oz = (r.z - Math.round(r.z)) * TILE
-        const mtx = new THREE.Matrix4().compose(
-          new THREE.Vector3(pos.x + ox, 0.06, pos.z + oz),
-          new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), r.r),
-          new THREE.Vector3(r.s, r.s * 0.7, r.s),
-        )
-        rm.setMatrixAt(i, mtx)
-      })
-      rm.instanceMatrix.needsUpdate = true
-      this.decoGroup.add(rm)
-    }
-  }
-
   private buildRoads(map: MapData) {
     const roadSet = new Set<string>()
     for (const p of map.plots) {
@@ -392,8 +287,8 @@ export class WorldScene {
     const dashes: { x: number; z: number; rot: number }[] = []
     tiles.forEach(([x, y], i) => {
       const pos = this.tilePos(x, y)
-      asphalt.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, 0.02, pos.z))
-      curb.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, -0.015, pos.z))
+      asphalt.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, 0.05, pos.z))
+      curb.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, 0.015, pos.z))
       const ne = roadSet.has(`${x + 1},${y - 1}`); const sw = roadSet.has(`${x - 1},${y + 1}`)
       const nw = roadSet.has(`${x - 1},${y - 1}`); const se = roadSet.has(`${x + 1},${y + 1}`)
       const n = roadSet.has(`${x},${y - 1}`); const s = roadSet.has(`${x},${y + 1}`)
@@ -412,7 +307,7 @@ export class WorldScene {
       const dm = new THREE.InstancedMesh(dashGeo, mat('#c9b45c'), dashes.length)
       dashes.forEach((d, i) => {
         dm.setMatrixAt(i, new THREE.Matrix4().compose(
-          new THREE.Vector3(d.x, 0.07, d.z),
+          new THREE.Vector3(d.x, 0.1, d.z),
           new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), d.rot),
           new THREE.Vector3(1, 1, 1),
         ))
@@ -436,23 +331,20 @@ export class WorldScene {
         retail: p.b_retail,
       })
     const pos = this.tilePos(p.x, p.y)
-    if (p.type === 'water') pos.y = -0.16
+    pos.y = p.type === 'water' ? WATER_Y + 0.02 : (this.terrain?.heightAt(pos.x, pos.z) ?? 0) - 0.06
     g.position.copy(pos)
     if (p.b_code !== 'harbor') g.rotation.y = Math.floor(hash2(p.x, p.y, 5) * 4) * (Math.PI / 2)
     // kouřové puff-y z komínů
     const smokes: { m: THREE.Mesh; base: THREE.Vector3; ph: number }[] = []
-    g.traverse((n) => {
-      const s = (n as THREE.Mesh).userData?.smoke
-      if (s) {
-        for (let i = 0; i < 3; i++) {
-          const puff = new THREE.Mesh(PUFF_GEO, SMOKE_MAT)
-          puff.castShadow = false
-          puff.position.set(pos.x + s.x, pos.y + s.y, pos.z + s.z)
-          this.rootGroup.add(puff)
-          smokes.push({ m: puff, base: new THREE.Vector3(pos.x + s.x, pos.y + s.y, pos.z + s.z), ph: i / 3 })
-        }
+    for (const src of (g.userData.smokeSrc ?? []) as { x: number; y: number; z: number }[]) {
+      for (let i = 0; i < 3; i++) {
+        const puff = new THREE.Mesh(PUFF_GEO, SMOKE_MAT)
+        puff.castShadow = false
+        puff.position.set(pos.x + src.x, pos.y + src.y, pos.z + src.z)
+        this.rootGroup.add(puff)
+        smokes.push({ m: puff, base: new THREE.Vector3(pos.x + src.x, pos.y + src.y, pos.z + src.z), ph: i / 3 })
       }
-    })
+    }
     g.userData.smokes = smokes
     this.rootGroup.add(g)
     this.buildGroups.set(p.id, g)
@@ -476,7 +368,7 @@ export class WorldScene {
     g.add(box(t, 0.03, L, m, -L / 2, 0.015, 0))
     g.add(box(t, 0.03, L, m, L / 2, 0.015, 0))
     const pos = this.tilePos(p.x, p.y)
-    g.position.set(pos.x, 0.0, pos.z)
+    g.position.set(pos.x, (this.terrain?.heightAt(pos.x, pos.z) ?? 0) + 0.02, pos.z)
     this.rootGroup.add(g)
     this.ownerGroups.set(p.id, g)
   }
@@ -499,7 +391,7 @@ export class WorldScene {
     const p = this.plots.get(id)
     if (!p) { this.selFrame.visible = false; return }
     const pos = this.tilePos(p.x, p.y)
-    this.selFrame.position.set(pos.x, 0, pos.z)
+    this.selFrame.position.set(pos.x, (this.terrain?.heightAt(pos.x, pos.z) ?? 0) + 0.03, pos.z)
     this.selFrame.visible = true
   }
 
@@ -510,7 +402,7 @@ export class WorldScene {
     const p = this.plots.get(id)
     if (!p) { this.hovFrame.visible = false; return }
     const pos = this.tilePos(p.x, p.y)
-    this.hovFrame.position.set(pos.x, 0, pos.z)
+    this.hovFrame.position.set(pos.x, (this.terrain?.heightAt(pos.x, pos.z) ?? 0) + 0.03, pos.z)
     this.hovFrame.visible = true
   }
 
@@ -523,7 +415,7 @@ export class WorldScene {
       if (r.status !== 'active' || r.path.length < 2) continue
       const pts = r.path.map((pt) => {
         const v = this.tilePos(pt.x, pt.y)
-        v.y = r.mode === 'ship' ? 0.03 : 0.14
+        v.y = 0
         return v
       })
       const cum = [0]
@@ -595,10 +487,11 @@ export class WorldScene {
   private tick(dt: number, t: number) {
     this.hourAbs += dt * this.speed / SEC_PER_HOUR
     this.updateDayNight()
+    this.terrain?.update(t)
 
     // animace budov a stavenišť
     for (const g of this.buildGroups.values()) {
-      const anims = g.userData.anim as Anim[] | undefined
+      const anims = g.userData.anims as Anim[] | undefined
       if (anims) {
         for (const a of anims) {
           const base = (a.node.userData.base ??= { x: a.node.position.x, y: a.node.position.y, rz: a.node.rotation.z })
@@ -629,7 +522,9 @@ export class WorldScene {
       this.pointAt(v.lane, t0, this.tmpA)
       this.pointAt(v.lane, t0 + 0.004, this.tmpB)
       v.g.position.copy(this.tmpA)
-      if (v.kind === 'ship') v.g.position.y += Math.sin(t * 2 + v.off * 9) * 0.02
+      v.g.position.y = v.kind === 'ship'
+        ? WATER_Y + 0.1 + Math.sin(t * 2 + v.off * 9) * 0.02
+        : (this.terrain?.heightAt(this.tmpA.x, this.tmpA.z) ?? 0) + 0.1
       const dx = this.tmpB.x - this.tmpA.x
       const dz = this.tmpB.z - this.tmpA.z
       if (dx * dx + dz * dz > 1e-8) v.g.rotation.y = -Math.atan2(dz, dx)
@@ -643,16 +538,17 @@ export class WorldScene {
 
   /* ── picking ─────────────────────────────────────────────────────────── */
   private pick(cx: number, cy: number): MapPlot | null {
+    if (!this.terrain) return null
     const rect = this.renderer.domElement.getBoundingClientRect()
     this.ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1)
     this.ray.setFromCamera(this.ndc, this.camera)
-    const hits = this.ray.intersectObjects(this.pickMeshes, false)
+    const hits = this.ray.intersectObjects([this.terrain.ground, this.terrain.water], false)
     for (const h of hits) {
-      const ids = h.object.userData.plotIds as string[] | undefined
-      if (ids && h.instanceId !== undefined) {
-        const id = ids[h.instanceId]
-        if (id) return this.plots.get(id) ?? null
-      }
+      const gx = Math.round(h.point.x / TILE + (this.grid.w - 1) / 2)
+      const gy = Math.round(h.point.z / TILE + (this.grid.h - 1) / 2)
+      if (gx < 0 || gy < 0 || gx >= this.grid.w || gy >= this.grid.h) return null
+      const id = this.coordIndex.get(`${gx},${gy}`)
+      if (id) return this.plots.get(id) ?? null
     }
     return null
   }
@@ -711,6 +607,10 @@ export class WorldScene {
     el.removeEventListener('pointerdown', this.onDown)
     el.removeEventListener('pointerup', this.onUp)
     this.controls.dispose()
+    if (this.terrain) {
+      this.terrain.ground.geometry.dispose()
+      this.terrain.water.geometry.dispose()
+    }
     this.scene.traverse((n) => {
       const m = n as THREE.Mesh
       if (m.isMesh && m.geometry && !isCachedGeo(m.geometry)) m.geometry.dispose()

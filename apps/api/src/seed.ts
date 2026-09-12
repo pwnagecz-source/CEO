@@ -37,8 +37,8 @@ type Seed = {
 }
 
 /** Rozměr světa. Default výrazně větší než původních 24×12; přes env laditelné. */
-const GRID_W = Number(process.env.WORLD_W ?? 64)
-const GRID_H = Number(process.env.WORLD_H ?? 32)
+const GRID_W = Number(process.env.WORLD_W ?? 80)
+const GRID_H = Number(process.env.WORLD_H ?? 40)
 
 const WORLD_CODE = process.env.WORLD_CODE ?? 'dev-s01'
 
