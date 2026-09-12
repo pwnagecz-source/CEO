@@ -7,7 +7,68 @@ simulovaným zákazníkům.
 Inspirace: **Capital Rift** (hráči řízený order book, live P&L, logistika) a **Sim Companies**
 (tick-based výroba, agregovaná retail poptávka, systém odvětví).
 
-> Stav projektu: **Fáze 0 — návrh.** Žádný produkční kód zatím.
+> Stav projektu: **Fáze 0–2 hotové (návrh + datový model) a aplikace se dá spustit.**
+> Běží API s kompletním schématem, podvojným ledgerem a matching enginem plus webový
+> terminál. Viz [Spuštění](#spuštění).
+
+## Spuštění
+
+Bez Dockeru a bez instalovaného Postgresu — databáze běží jako **PGlite**
+(skutečný PostgreSQL 18 zkompilovaný do WASM, v procesu API).
+
+```bash
+npm install
+npm run dev          # API (Fastify, :8080) + web (Vite, :5173) najednou
+```
+
+Web otevílej na portu **5173**; `/api` požadavky proxyuje na Fastify, takže prohlížeč
+mluví jen s jedním originem. Data jsou defaultně in-memory — každý start je čistý svět,
+migrace + seed trvají ~1 s. `PGDATA=./data npm run dev` je uloží na disk.
+
+```bash
+npm run dev:api      # jen API
+npm run dev:web      # jen web
+npm run smoke        # end-to-end test obchodního cyklu (API musí běžet)
+npm run db:check     # spustí celou migraci na skutečném PostgreSQL 18 (WASM)
+npm run db:validate  # levnější: jen PostgreSQL parser (pglast)
+npm run typecheck    # oba workspacy
+```
+
+`npm run smoke` přepočítává peníze **nezávisle na implementaci** — hrubou cenu,
+maker/taker poplatky, pohyb M2 a pět audit invariantů — takže zachytí rozjetí mezi
+matching enginem a ledgerem, ne jen HTTP 200.
+
+### Co je hotové a co je kostra
+
+| | Stav |
+|---|---|
+| Kompletní DDL (125 statementů) — 26 tabulek, 13 enumů, podvojný ledger, triggery, audit funkce | ✅ běží na skutečném Postgresu |
+| Matching engine: CLOB, price-time priority, limit + market (IOC), escrow, maker/taker poplatky, anti-wash, idempotence, rušení příkazů | ✅ end-to-end otestováno |
+| Pět audit invariantů včetně makro identity `M2 ≡ ΔM` a hlídače úniku escrow | ✅ |
+| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 288 pozemků, 4 demo firmy, 12 úvodních příkazů | ✅ |
+| Webový terminál: order book s hloubkou, zadávání příkazů s odhadem exekuce, P&L firmy, sklad, páska obchodů, stavová lišta invariantů | ✅ |
+| Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
+
+### Struktura
+
+```
+apps/api/src/
+  db.ts        PGlite + spouštění migrací + transakční helper
+  ledger.ts    podvojný zápis, zůstatky, makro snapshot, audit invariantů
+  market.ts    matching engine, order book, escrow, rušení příkazů
+  seed.ts      seed světa z balance JSON + demo firmy
+  server.ts    Fastify routy
+apps/web/src/
+  api.ts       typovaný klient (relativní cesty → Vite proxy)
+  estimate.ts  odhad exekuce proti booku (stejná logika jako engine)
+  components/  Header, ItemsPanel, BookPanel, CompanyPanel, TradeTape, Footer
+tools/
+  db/check_ddl.mjs      spuštění DDL na skutečném Postgresu, statement po statementu
+  api/smoke.mjs         end-to-end test s nezávislým přepočtem peněz
+  db/validate_sql.py    parser-level validace (pglast)
+  balance/*.py          generátor a ladič ceníku
+scripts/dev.mjs         spustí API i web najednou
+```
 
 ## Dokumentace
 
@@ -16,7 +77,7 @@ Inspirace: **Capital Rift** (hráči řízený order book, live P&L, logistika) 
 | 00 | [Vize a koncept](docs/00-vize-a-koncept.md) | pilíře, core loop, ekonomické toky, výroba, CLOB trh, retail, anti-inflace, datový model, stack, MVP | ✅ návrh<br>⚠️ 3 sekce překonány |
 | 10 | [Ekonomika a core loop](docs/10-ekonomika-core-loop.md) | uzamčená rozhodnutí, real-time tick model, odvození cen, pozemky, retail fill-rate, inflace, sezóny | ✅ hotovo |
 | 20 | [Datový model](docs/20-datovy-model.md) | ERD, 3 nezrušitelná pravidla, invarianty, indexy a hot path, escrow, tick, observabilita | ✅ hotovo |
-| — | [0001_init.sql](db/migrations/0001_init.sql) | kompletní DDL — 26 tabulek, 122 statementů, podvojný ledger s DB-vynuceným invariantem | ✅ validováno |
+| — | [0001_init.sql](db/migrations/0001_init.sql) | kompletní DDL — 26 tabulek, 125 statementů, podvojný ledger s DB-vynuceným invariantem | ✅ parser **i** skutečný Postgres |
 | — | [Balance v0.2](docs/generated/balance-v0.2.md) | *generováno* — ceník 25 položek, 25 budov, úrovně, režie, pozemky, makro projekce, ladící knoflíky | 🤖 auto |
 | 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 4 uzamčena, 3 nová z modelových zjištění, 4 otevřená | 🔶 částečně |
 | 30 | `docs/30-matching-engine.md` | CLOB specifikace, pseudokód, race conditions, testy | ⬜ |
@@ -42,9 +103,13 @@ Detail a zdůvodnění: [`docs/00-vize-a-koncept.md` §5](docs/00-vize-a-koncept
 | `tools/balance/generate_v0.py` | Odvodí ceny všech položek zdola nahoru (cost-plus) a vygeneruje balance tabulky + seed JSON. Retuning = změna `m`/`payback`/`q_out` a rerun. |
 | `tools/balance/tune.py` | Parametrický sweep makro knoflíků (972 kombinací) proti cílovému CPI driftu. |
 | `tools/db/validate_sql.py` | Validuje migrace skutečným PostgreSQL parserem (pglast) + hlásí pasti, které parser propustí. |
+| `tools/db/check_ddl.mjs` | **Spustí** celou migraci na PostgreSQL 18 (PGlite/WASM), statement po statementu, a vypíše každou chybu. Odhaluje to, co parser ne: sémantiku, typy, neexistující objekty, `IMMUTABLE` v indexových predikátech. |
+| `tools/api/smoke.mjs` | End-to-end test obchodního cyklu proti běžícímu API s nezávislým přepočtem cen, poplatků, M2 a pěti audit invariantů. |
 | `seed/balance-v0.2.json` | Výstup generátoru — seed dat pro DB (položky, budovy, recepty, úrovně, pozemky). |
 
 ```bash
+npm run db:check                                  # migrace na skutečném Postgresu
+npm run smoke                                     # end-to-end obchodní cyklus
 python3 tools/balance/generate_v0.py              # přegenerovat balance
 python3 tools/balance/tune.py --top 12            # sweep makro knoflíků
 RETAIL_FILL_TARGET=0.7 HQ_P=1.6 python3 tools/balance/generate_v0.py   # override přes env

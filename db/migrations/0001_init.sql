@@ -14,8 +14,9 @@
 
 BEGIN;
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- gen_random_uuid()
-CREATE EXTENSION IF NOT EXISTS citext;     -- case-insensitive e-mail
+-- ŽÁDNÁ rozšíření. gen_random_uuid() je od PG13 v jádře; case-insensitive
+-- unikátnost řeší funkční indexy nad lower() místo citext. Migrace tak běží na
+-- ostrém Postgresu i na PGlite (embedded WASM Postgres pro vývoj/testy).
 
 -- ============================================================================
 --  1. ENUMY
@@ -150,9 +151,9 @@ COMMENT ON TABLE worlds IS
 
 CREATE TABLE users (
     id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    email           citext      NOT NULL UNIQUE,
+    email           text        NOT NULL,
     password_hash   text        NOT NULL,                  -- argon2id
-    display_name    citext      NOT NULL UNIQUE,
+    display_name    text        NOT NULL,
     is_banned       boolean     NOT NULL DEFAULT false,
     is_admin        boolean     NOT NULL DEFAULT false,
     email_verified_at timestamptz,
@@ -165,6 +166,9 @@ CREATE TABLE users (
     CONSTRAINT users_no_self_referral CHECK (referral_user_id IS NULL
                                              OR referral_user_id <> id)
 );
+-- case-insensitive unikátnost bez citext
+CREATE UNIQUE INDEX users_email_uniq        ON users (lower(email));
+CREATE UNIQUE INDEX users_display_name_uniq ON users (lower(display_name));
 CREATE INDEX users_last_seen_idx ON users (last_seen_at DESC);
 
 CREATE TABLE sessions (
@@ -176,13 +180,19 @@ CREATE TABLE sessions (
     user_agent  text,
     CONSTRAINT sessions_future_expiry CHECK (expires_at > created_at)
 );
-CREATE INDEX sessions_user_idx ON sessions (user_id) WHERE expires_at > now();
+-- Lookup je `WHERE user_id = $1 AND expires_at > now()`. Partial index s `now()`
+-- v predikátu NELZE: now() je STABLE, ne IMMUTABLE, a obsah indexu by se v čase
+-- měnil (PG to odmítne chybou 42P17). Kompozitní klíč obslouží stejný dotaz
+-- jako index range scan a zůstává vždy korektní.
+CREATE INDEX sessions_user_idx ON sessions (user_id, expires_at DESC);
+-- Prošlé sessiony maže periodický úklid, ne indexový predikát:
+--   DELETE FROM sessions WHERE expires_at < now() - interval '1 day';
 
 CREATE TABLE companies (
     id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id         bigint      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     world_id        bigint      NOT NULL REFERENCES worlds(id) ON DELETE RESTRICT,
-    name            citext      NOT NULL,
+    name            text        NOT NULL,
     industry_id     bigint,                                -- FK přidána níže (cyklus)
     status          company_status NOT NULL DEFAULT 'active',
     prestige_level  integer     NOT NULL DEFAULT 0,        -- přenáší se mezi sezónami
@@ -196,8 +206,8 @@ CREATE TABLE companies (
     CONSTRAINT companies_legacy_points_nonneg CHECK (legacy_points >= 0),
     CONSTRAINT companies_prestige_nonneg      CHECK (prestige_level >= 0)
 );
--- jméno firmy je unikátní per svět, ne globálně
-CREATE UNIQUE INDEX companies_world_name_uniq ON companies (world_id, name);
+-- jméno firmy je unikátní per svět, ne globálně (case-insensitive)
+CREATE UNIQUE INDEX companies_world_name_uniq ON companies (world_id, lower(name));
 CREATE INDEX companies_user_idx   ON companies (user_id);
 CREATE INDEX companies_world_idx  ON companies (world_id) WHERE status = 'active';
 CREATE INDEX companies_settle_idx ON companies (last_settled_at);
@@ -341,9 +351,6 @@ CREATE TRIGGER recipe_inputs_no_self_reference
     FOR EACH ROW EXECUTE FUNCTION fn_recipe_inputs_no_self_reference();
 
 COMMENT ON TRIGGER recipe_inputs_no_self_reference ON recipe_inputs IS
-    'Zabraňuje cyklu v produkčním grafu — bez toho lze tisknout zboží z ničeho.';
-
-COMMENT ON CONSTRAINT recipe_inputs_not_output ON recipe_inputs IS
     'Zabraňuje cyklu v produkčním grafu — bez toho lze tisknout zboží z ničeho.';
 
 
@@ -553,6 +560,13 @@ CREATE TABLE market_orders (
     qty            numeric(20,4) NOT NULL,
     qty_filled     numeric(20,4) NOT NULL DEFAULT 0,
     status         order_status NOT NULL DEFAULT 'open',
+    -- Kolik hotovosti je PRÁVĚ TEĎ zablokováno na účtu escrow_market kvůli tomuhle
+    -- příkazu. Bez tohohle sloupce by se escrow musel zpětně dopočítávat z
+    -- price_limit × zbývající množství, což (a) nezná cenu, za kterou se skutečně
+    -- plnilo, a (b) zanechává drobné zbytky navždy zablokované. Tady je to přesné:
+    -- invariant „Σ escrow_locked firmy == zůstatek jejího účtu escrow_market“
+    -- kontroluje fn_audit_escrow_mismatch().
+    escrow_locked  numeric(24,6) NOT NULL DEFAULT 0,
     -- idempotence: klient generuje UUID, server ho drží 24 h
     idempotency_key uuid,
     is_npc         boolean NOT NULL DEFAULT false,   -- NPC market maker
@@ -563,13 +577,20 @@ CREATE TABLE market_orders (
 
     CONSTRAINT market_orders_qty_positive   CHECK (qty > 0),
     CONSTRAINT market_orders_filled_bounds  CHECK (qty_filled >= 0 AND qty_filled <= qty),
+    CONSTRAINT market_orders_escrow_nonneg  CHECK (escrow_locked >= 0),
+    -- Terminální příkaz nesmí držet žádný escrow; jinak by peníze zůstaly viset.
+    CONSTRAINT market_orders_terminal_no_escrow CHECK (
+        status NOT IN ('filled','cancelled','expired','rejected') OR escrow_locked = 0
+    ),
     CONSTRAINT market_orders_price_positive CHECK (price_limit IS NULL OR price_limit > 0),
     CONSTRAINT market_orders_limit_needs_price CHECK (
         order_type <> 'limit' OR price_limit IS NOT NULL
     ),
-    CONSTRAINT market_orders_market_is_immediate CHECK (
-        order_type <> 'market' OR status IN ('filled','rejected','cancelled')
-    ),
+    -- Invariant „market order nikdy nezůstane v booku“ (IOC) TADY BÝVAL JAKO CHECK
+    -- a byl špatně: CHECK se vyhodnocuje okamžitě při INSERT, jenže matching engine
+    -- musí řádek nejdřív založit jako 'open' (kvůli FK z trades) a teprve po
+    -- spárování ho dořešit na 'filled'/'cancelled'. To je invariant na úrovni
+    -- COMMITU → patří do DEFERRABLE CONSTRAINT TRIGGERU (viz níže).
     CONSTRAINT market_orders_filled_status_consistency CHECK (
         (qty_filled = qty) = (status = 'filled')
         OR status IN ('cancelled','expired','rejected')
@@ -591,6 +612,47 @@ CREATE INDEX market_orders_bids_idx
     WHERE status IN ('open','partial') AND side = 'buy';
 
 CREATE INDEX market_orders_company_idx ON market_orders (company_id, status);
+
+-- ============================================================================
+--  IOC invariant: market order nesmí po COMMITU zůstat v booku
+-- ============================================================================
+-- DEFERRABLE, protože řádek během matchování krátkodobě 'open' být musí.
+--
+-- ★ Zásadní detail: NEČTEME NEW. U deferred triggeru PostgreSQL uchová přechodový
+-- řádek z okamžiku INSERT/UPDATE a vyhodnotí ho až při COMMIT — NEW.status by tedy
+-- pořád nesl 'open' z INSERTu, i když byl řádek mezitím správně dořešen na
+-- 'filled'. Čteme proto AKTUÁLNÍ stav z tabulky; tím trigger kontroluje skutečný
+-- invariant („na konci transakce žádný market order nečeká v booku“).
+CREATE OR REPLACE FUNCTION fn_market_orders_no_resting_market() RETURNS trigger AS $$
+DECLARE
+    cur_type   order_type;
+    cur_status order_status;
+BEGIN
+    SELECT o.order_type, o.status INTO cur_type, cur_status
+      FROM market_orders o WHERE o.id = NEW.id;
+
+    -- řádek byl mezitím smazán → není co porušit
+    IF cur_type IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF cur_type = 'market' AND cur_status IN ('open','partial') THEN
+        RAISE EXCEPTION
+            'market order % nesmí zůstat v booku (status=%): IOC musí skončit jako filled, cancelled nebo rejected',
+            NEW.id, cur_status
+            USING HINT = 'placeOrder() musí po matchování nastavit terminální status a uvolnit escrow/rezervaci na nevyplněný zbytek.';
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER market_orders_no_resting_market
+    AFTER INSERT OR UPDATE OF status ON market_orders
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION fn_market_orders_no_resting_market();
+
+COMMENT ON CONSTRAINT market_orders_no_resting_market ON market_orders IS
+    'IOC: market order nesmí po COMMITU čekat v booku. Deferred, protože během matchování je krátkodobě open.';
 CREATE INDEX market_orders_expiry_idx  ON market_orders (expires_at)
     WHERE status IN ('open','partial') AND expires_at IS NOT NULL;
 CREATE UNIQUE INDEX market_orders_idempotency_uniq
@@ -1078,6 +1140,36 @@ BEGIN
     SELECT ii.id, ii.quantity, ii.reserved_qty
       FROM inventory_items ii
      WHERE ii.reserved_qty > ii.quantity OR ii.quantity < 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Sedí escrow zablokovaný na příkazech se zůstatkem účtu escrow_market?
+--
+-- Tohle je hlídač proti ÚNIKU PENĚZ. Kdyby matching engine zapomněl uvolnit
+-- nevyčerpaný zbytek escrow (nebo ho naopak uvolnil dvakrát), rovnost se
+-- poruší. Bez tohohle auditu by taková chyba vypadala jako „někomu se občas
+-- ztratí pár haléřů“ a odhalila by se až z makro čísel po týdnech.
+CREATE OR REPLACE FUNCTION fn_audit_escrow_mismatch()
+RETURNS TABLE (
+    company_id        bigint,
+    locked_on_orders  numeric,
+    account_balance   numeric,
+    diff              numeric
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT c.id,
+           COALESCE(o.locked, 0),
+           COALESCE(a.balance, 0),
+           COALESCE(o.locked, 0) - COALESCE(a.balance, 0)
+      FROM companies c
+      LEFT JOIN (SELECT mo.company_id, SUM(mo.escrow_locked) AS locked
+                   FROM market_orders mo GROUP BY mo.company_id) o
+             ON o.company_id = c.id
+      LEFT JOIN accounts a
+             ON a.owner_type = 'company' AND a.owner_id = c.id
+            AND a.kind = 'escrow_market'
+     WHERE COALESCE(o.locked, 0) <> COALESCE(a.balance, 0);
 END;
 $$ LANGUAGE plpgsql;
 

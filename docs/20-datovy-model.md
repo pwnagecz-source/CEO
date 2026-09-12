@@ -1,7 +1,9 @@
 # 20 · Datový model
 
 > **Fáze 2.** Kompletní DDL: [`db/migrations/0001_init.sql`](../db/migrations/0001_init.sql)
-> — 122 statementů, validováno skutečným PostgreSQL parserem (`tools/db/validate_sql.py`).
+> — 125 statementů. Validováno dvěma nezávislými způsoby: PostgreSQL parserem
+> (`npm run db:validate`, pglast) **a skutečným spuštěním** na PostgreSQL 18
+> v PGlite/WASM (`npm run db:check`). Bez Dockeru a bez externího serveru.
 >
 > Navazuje na [`docs/00-vize-a-koncept.md`](00-vize-a-koncept.md) §4 a
 > [`docs/10-ekonomika-core-loop.md`](10-ekonomika-core-loop.md).
@@ -136,7 +138,23 @@ ztráty dat. Teď je to jeden sloupec.
 | Jeden primární sklad na firmu | partial UNIQUE index `WHERE is_primary` | |
 | Mřížka pozemků | `UNIQUE (world_id, x, y)` | |
 | `qty_filled <= qty` | `CHECK` | over-fill by tiskl zboží |
-| Market order nemůže zůstat `open` | `CHECK` | IOC sémantika |
+| Market order nemůže zůstat `open` | CONSTRAINT TRIGGER **deferred** | IOC sémantika |
+| Escrow na příkazech = účet `escrow_market` | `fn_audit_escrow_mismatch()` | únik peněz, viz §5.1 |
+| Terminální příkaz nedrží escrow | `CHECK (status NOT IN (…) OR escrow_locked = 0)` | jinak peníze zůstanou viset navždy |
+
+**Kdy CHECK a kdy deferred trigger.** CHECK se vyhodnocuje *okamžitě* při každém
+zápisu řádku, takže nesmí nastat ani přechodně. To je správně pro vztahy uvnitř
+jednoho řádku (`qty_filled <= qty`). Ale invariant „market order nezůstane v booku“
+platí až na úrovni **commitu**: matching engine musí řádek nejdřív založit jako
+`open` (kvůli FK z `trades`) a teprve po spárování ho dořešit na `filled`/`cancelled`.
+Původní CHECK tohle odmítl — a bylo to špatně nejen pro market order: nedal se tak
+založit ani příkaz, který se měl o pár statementů později správně vyřešit. Proto
+`DEFERRABLE INITIALLY DEFERRED`, stejný mechanismus jako u `Σ legs = 0`.
+
+⚠️ **Past u deferred triggerů:** PostgreSQL uchová přechodový řádek z okamžiku
+INSERT/UPDATE a vyhodnotí ho až při COMMIT. `NEW.status` tedy nese hodnotu z INSERTu
+(`open`), i když byl řádek mezitím dořešen na `filled`. Trigger proto **nečte `NEW`**,
+ale aktuální stav z tabulky. Bez toho by byl invariant nepoužitelný.
 
 **Pravidlo:** cokoliv, co musí platit *vždy*, patří do DB. Aplikační validace je první
 linie pro UX (hezká chybová hláška), DB constraint je záchranná síť proti bugům.
@@ -220,25 +238,69 @@ Kritické pro správnost. **Při založení příkazu, ne při vyplnění.**
 ```
 SELL limit order na 100 prken:
   inventory_items.reserved_qty += 100        (CHECK: reserved <= quantity)
+  market_orders.escrow_locked  = 0           (sell zamyká ZBOŽÍ, ne peníze)
   → dostupné = quantity − reserved
 
 BUY limit order na 100 prken @ 0,69:
-  accounts.balance(cash)       −= 69,00
-  accounts.balance(escrow)     += 69,00      (journal: 2 legs, Σ = 0, transfer/internal)
+  escrow_locked = 69,00 × (1 + 2,5 %) + 0,01 = 70,73
+  accounts.balance(cash)       −= 70,73
+  accounts.balance(escrow)     += 70,73      (journal: 2 legs, Σ = 0, transfer/internal)
 
-Při vyplnění:
-  prodávající: reserved_qty −= 100, quantity −= 100, cash += (69 − fee)
-  kupující:    escrow −= 69, quantity += 100
-  systém:      sink_exchange_fee += fee
+BUY market order (IOC) na 300 klád:
+  escrow_locked = nejhorší případ × (1 + 2,5 %) + 0,01
+  kde nejhorší případ = průchod bookem po hladinách (price-time priority),
+  NE nejlepší ask — market order může projet několik cenových úrovní
+
+Při vyplnění (kupující platí cenu I poplatek Z ESCROW):
+  kupující:    escrow −= (gross + fee_buyer),   escrow_locked −= totéž, quantity += 100
+  prodávající: cash     += (gross − fee_seller), reserved_qty −= 100, quantity −= 100
+  systém:      sink_exchange_fee += (fee_buyer + fee_seller)
   → jeden txn_id, Σ legs = 0, všechno nebo nic
 
-Při zrušení:
-  reserved_qty −= 100  /  escrow −= 69, cash += 69
+Při zrušení / doplnění příkazu:
+  reserved_qty −= zbytek  /  escrow −= escrow_locked, cash += escrow_locked
+  escrow_locked = 0
 ```
 
 Důvod, proč *při založení*: bez toho lze přeprodat. Hráč založí 10 sell orderů na
 stejných 100 prken a všechny se vyplní — zboží vznikne z ničeho. CHECK constraint
 `reserved_qty <= quantity` to odmítne na úrovni DB.
+
+### 5.1 Proč `escrow_locked` existuje
+
+Bez něj by se zablokovaná částka musela **dopočítávat** z `price_limit × zbývající
+množství`. Jenže to nefunguje:
+
+- Limitní příkaz, který se plnil levněji než za svůj limit, má skutečný zbytek jiný
+  než dopočítaný.
+- Rezerva na poplatek se v dopočtu neobjeví vůbec.
+- U market orderu žádný `price_limit` není.
+
+V praxi to vypadalo jako `bestAsk × qty × 1,001` „rezerva na víc fillů“ — a to bylo
+špatně **oběma směry**: u tenkého booku moc malá (fill by šel do mínusu a `CHECK`
+by odpálil transakci) a u hlubokého booku zbytek navždy zůstal zablokovaný.
+**0,0345 $ na jeden obchod**, který by nikdo nenašel jinak než rozjetými makro čísly
+po týdnech.
+
+Proto se zámek drží explicitně a invariant je auditovatelný:
+
+```sql
+-- musí vrátit 0 řádků
+SELECT * FROM fn_audit_escrow_mismatch();
+-- Σ market_orders.escrow_locked firmy  ==  accounts.balance(escrow_market) firmy
+```
+
+**Pořadí operací je zásadní.** Příkaz, který se fillem doplňuje, musí nejdřív uvolnit
+zbytek escrow a teprve pak dostat `status='filled'`:
+
+- `market_orders_terminal_no_escrow` je obyčejný `CHECK` → vyhodnocuje se okamžitě,
+  řádek nesmí být ani na okamžik `filled` s nenulovým zámkem.
+- `market_orders_filled_status_consistency` naopak zakazuje zvednout `qty_filled`
+  na plno, dokud status není `filled`.
+
+Dohromady to znamená jediné možné pořadí: *uvolnit escrow → pak atomicky množství
+i status*. Obě podmínky v jednom `UPDATE`, protože `CASE` v `SET` vidí staré hodnoty
+řádku.
 
 **Zásoby nejsou účet.** `inventory_items` je stavová tabulka, ne ledger. Důvod: zboží
 se netvoří podvojně (vzniká jen těžbou, zaniká jen spotřebou — doc 00 §3.2), takže
@@ -326,16 +388,40 @@ SELECT * FROM fn_world_money_supply($1);   -- m2, faucet_total, sink_total
 Nemusíš rekonstruovat toky z `journal_entries` — systémové účty *jsou* kumulativní
 historie faucetů a sinků.
 
-### 8.3 Noční audit — tři funkce, které musí vrátit 0 řádků
+### 8.3 Noční audit — pět kontrol, které musí vrátit 0 řádků
 
 ```sql
-SELECT * FROM fn_audit_unbalanced_txns();      -- Σ legs ≠ 0  → leak
+SELECT * FROM fn_audit_unbalanced_txns();      -- Σ legs ≠ 0 → leak
 SELECT * FROM fn_audit_balance_drift();        -- accounts.balance ≠ Σ entries → drift
 SELECT * FROM fn_audit_oversold_inventory();   -- reserved > quantity → přeprodáno
+SELECT * FROM fn_audit_escrow_mismatch();      -- Σ escrow_locked ≠ účet escrow_market → únik peněz
 ```
 
+Pátá kontrola není funkce, ale **makro identita** počítaná přímo v dotazu:
+
+```
+M2  ==  peníze vytvořené − peníze zničené
+```
+
+Drží automaticky, pokud všechny peníze prošly ledgerem: transfery mezi firmami M2
+nemění, takže jakýkoliv nesoulad znamená, že peníze vznikly nebo zmizely mimo ledger
+— tj. porušené pravidlo 2 z doc 10. V aplikaci ji počítá `audit()` v
+`apps/api/src/ledger.ts` a je vidět v patičce UI.
+
+**Znaménková konvence systémových účtů.** Bez ní je `ΔM` obráceně a ADR-009 by řídil
+měnovou politiku proti vlastnímu cíli:
+
+| | vznik peněz | zánik peněz |
+|---|---|---|
+| systémový účet | `faucet_*` jde **do mínusu** | `sink_*` jde **do plusu** |
+| účet firmy | `cash` do plusu | `cash` do mínusu |
+| odvozeno | `moneyCreated = −Σ faucet` | `moneyDestroyed = +Σ sink` |
+
+`ΔM = moneyCreated − moneyDestroyed = −(Σ faucet + Σ sink)`. Naivní `Σ faucet − Σ sink`
+dává opačné znaménko a vypadá přitom na první pohled rozumně.
+
 Výsledky se zapisují do `audit_results` s partial indexem na `WHERE NOT passed`, takže
-admin dashboard „co je rozbité" je jeden dotaz.
+admin dashboard „co je rozbité“ je jeden dotaz.
 
 ---
 
@@ -361,21 +447,53 @@ admin dashboard „co je rozbité" je jeden dotaz.
 
 ## 10. Validace
 
+Dvě úrovně, obě bez Dockeru a bez externího serveru:
+
 ```bash
-pip install pglast
-python3 tools/db/validate_sql.py db/migrations/0001_init.sql
+npm run db:validate   # úroveň 1 — PostgreSQL parser (pglast), odhalí syntax a známé pasti
+npm run db:check      # úroveň 2 — SKUTEČNÉ spuštění DDL na PostgreSQL 18 (PGlite/WASM)
+npm run smoke         # úroveň 3 — end-to-end obchodní cyklus s nezávislým přepočtem peněz
 ```
 
-Spouští SQL skutečným PostgreSQL parserem (pglast je binding na parser z Postgresu,
-ne aproximace) a navíc hlásí známé pasti, které parser propustí, ale Postgres odmítne
-za běhu: CHECK s poddotazem, `COMMENT ON CONSTRAINT TRIGGER`, float v peněžních
-sloupcích, trailing comma.
+`db:check` spouští celou migraci statement po statementu proti opravdovému Postgresu
+zkompilovanému do WASM (PGlite — enums, plpgsql, `DEFERRABLE CONSTRAINT TRIGGER`,
+`NULLS NOT DISTINCT`, partial indexy). Tiskne každou chybu s číslem statementu, takže
+není potřeba iterovat po jedné.
 
-Parser při psaní tohoto schématu odhalil `COMMENT ON CONSTRAINT TRIGGER` — taková
-syntax v Postgresu neexistuje (správně je `COMMENT ON TRIGGER … ON <table>`). Další dvě
-pasti jsem opravil preventivně, než na ně došlo: CHECK constraint s `NOT EXISTS`
-poddotazem (Postgres v CHECK poddotazy zakazuje → nahrazeno BEFORE triggerem) a funkci
-s `RETURNS TABLE`, která používala `SELECT … INTO` bez `RETURN QUERY` (→ OUT parametry).
+### Co odhalil parser a co až skutečný Postgres
 
-⚠️ **Parser neověří sémantiku** — typy, FK na neexistující sloupce, duplicitní názvy.
-To odhalí až `psql -f` na skutečné instanci. Validátor je první linie, ne náhrada.
+Parser (pglast) při psaní schématu odhalil `COMMENT ON CONSTRAINT TRIGGER` — taková
+syntax neexistuje (správně je `COMMENT ON TRIGGER … ON <table>`). Další dvě pasti jsem
+opravil preventivně: CHECK s `NOT EXISTS` poddotazem (Postgres v CHECK poddotazy
+zakazuje → BEFORE trigger) a `RETURNS TABLE` funkci se `SELECT … INTO` bez
+`RETURN QUERY` (→ `RETURN QUERY`).
+
+**Oddíl výše přitom tvrdil, že sémantiku odhalí až `psql -f` na skutečné instanci.
+Měl pravdu.** Po zprovoznění aplikace reálné spuštění odhalilo dvě chyby, které
+parserem prošly bez povšimnutí:
+
+| Chyba | Kód | Proč ji parser nemohl chytit |
+|---|---|---|
+| `CREATE INDEX sessions_user_idx ON sessions (user_id) WHERE expires_at > now()` | `42P17` | syntakticky dokonale platný partial index. Až při tvorbě indexu Postgres kontroluje, že funkce v predikátu je `IMMUTABLE` — `now()` je `STABLE`, obsah indexu by se v čase měnil. Opraveno na kompozitní `(user_id, expires_at DESC)`, který stejný dotaz obslouží jako range scan. |
+| `COMMENT ON CONSTRAINT recipe_inputs_not_output ON recipe_inputs` | `42704` | odkaz na constraint, který nikdy nevznikl — mrtvý pozůstatek z draftu, kdy invariant ještě byl CHECK a ne trigger. Existenci jména parser neověřuje. |
+
+Obě byly v kódu, který „prošel validací“. Z toho plyne pravidlo pro migrace:
+`db:validate` je laciná první linie, **`db:check` je povinný** před každým commitem.
+
+### Přenositelnost migrace
+
+Schéma záměrně nepoužívá žádná contrib rozšíření, aby běželo identicky na produkčním
+Postgresu i v PGlite (která `pgcrypto` ani `citext` nemá):
+
+| Původně | Teď | Poznámka |
+|---|---|---|
+| `CREATE EXTENSION pgcrypto` + `gen_random_uuid()` | jen `gen_random_uuid()` | od PostgreSQL 13 je v jádru, rozšíření není potřeba |
+| `CREATE EXTENSION citext` + sloupce `citext` | `text` + `CREATE UNIQUE INDEX … ON lower(col)` | case-insensitive unikátnost bez rozšíření; funkcionální index je navíc explicitní |
+
+### Co validace NEověří
+
+Ani `db:check` nepozná, že je DDL *ekonomicky* špatně — že fee sazba rozbíjí marže,
+že index nepokrývá skutečný dotaz ticku, že invariant je příliš volný. Proto existuje
+`npm run smoke`: spustí obchod proti běžícímu API a **nezávisle přepočítá** hrubou
+cenu, maker/taker poplatky a pohyb M2, místo aby jen porovnal odpověď se snapshotem.
+Kdyby se matching engine a podvojný ledger rozešly, smoke test to chytí.

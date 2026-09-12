@@ -1,0 +1,29 @@
+{
+  "name": "ceo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CEO — MMO ekonomický simulátor (browser, text/UI oriented)",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev --workspace @ceo/api",
+    "dev:web": "npm run dev --workspace @ceo/web",
+    "start": "npm run start --workspace @ceo/api",
+    "smoke": "node tools/api/smoke.mjs",
+    "typecheck": "npm run typecheck --workspace @ceo/api && npm run typecheck --workspace @ceo/web",
+    "db:check": "node tools/db/check_ddl.mjs",
+    "db:validate": "python3 tools/db/validate_sql.py db/migrations/*.sql",
+    "balance": "python3 tools/balance/generate_v0.py",
+    "balance:tune": "python3 tools/balance/tune.py"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
