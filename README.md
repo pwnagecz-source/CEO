@@ -15,9 +15,10 @@ Inspirace: **Capital Rift** (hráči řízený order book, live P&L, logistika) 
 |---|---|---|---|
 | 00 | [Vize a koncept](docs/00-vize-a-koncept.md) | pilíře, core loop, ekonomické toky, výroba, CLOB trh, retail, anti-inflace, datový model, stack, MVP | ✅ návrh<br>⚠️ 3 sekce překonány |
 | 10 | [Ekonomika a core loop](docs/10-ekonomika-core-loop.md) | uzamčená rozhodnutí, real-time tick model, odvození cen, pozemky, retail fill-rate, inflace, sezóny | ✅ hotovo |
+| 20 | [Datový model](docs/20-datovy-model.md) | ERD, 3 nezrušitelná pravidla, invarianty, indexy a hot path, escrow, tick, observabilita | ✅ hotovo |
+| — | [0001_init.sql](db/migrations/0001_init.sql) | kompletní DDL — 26 tabulek, 122 statementů, podvojný ledger s DB-vynuceným invariantem | ✅ validováno |
 | — | [Balance v0.2](docs/generated/balance-v0.2.md) | *generováno* — ceník 25 položek, 25 budov, úrovně, režie, pozemky, makro projekce, ladící knoflíky | 🤖 auto |
 | 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 4 uzamčena, 3 nová z modelových zjištění, 4 otevřená | 🔶 částečně |
-| 20 | `docs/20-datovy-model.md` | kompletní DDL, indexy, constrainty, migrace | ⬜ |
 | 30 | `docs/30-matching-engine.md` | CLOB specifikace, pseudokód, race conditions, testy | ⬜ |
 | 40 | `docs/40-tick-engine.md` | výroba, retail simulace, údržba, lazy evaluation | ⬜ |
 | 50 | `docs/50-realtime.md` | SSE/WS, event schéma, coalescing, reconnect | ⬜ |
@@ -40,12 +41,14 @@ Detail a zdůvodnění: [`docs/00-vize-a-koncept.md` §5](docs/00-vize-a-koncept
 |---|---|
 | `tools/balance/generate_v0.py` | Odvodí ceny všech položek zdola nahoru (cost-plus) a vygeneruje balance tabulky + seed JSON. Retuning = změna `m`/`payback`/`q_out` a rerun. |
 | `tools/balance/tune.py` | Parametrický sweep makro knoflíků (972 kombinací) proti cílovému CPI driftu. |
+| `tools/db/validate_sql.py` | Validuje migrace skutečným PostgreSQL parserem (pglast) + hlásí pasti, které parser propustí. |
 | `seed/balance-v0.2.json` | Výstup generátoru — seed dat pro DB (položky, budovy, recepty, úrovně, pozemky). |
 
 ```bash
 python3 tools/balance/generate_v0.py              # přegenerovat balance
 python3 tools/balance/tune.py --top 12            # sweep makro knoflíků
 RETAIL_FILL_TARGET=0.7 HQ_P=1.6 python3 tools/balance/generate_v0.py   # override přes env
+pip install pglast && python3 tools/db/validate_sql.py db/migrations/*.sql
 ```
 
 
