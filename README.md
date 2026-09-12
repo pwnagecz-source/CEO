@@ -46,10 +46,11 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | Kompletní DDL (125 statementů) — 26 tabulek, 13 enumů, podvojný ledger, triggery, audit funkce | ✅ běží na skutečném Postgresu |
 | Matching engine: CLOB, price-time priority, limit + market (IOC), escrow, maker/taker poplatky, anti-wash, idempotence, rušení příkazů | ✅ end-to-end otestováno |
 | Pět audit invariantů včetně makro identity `M2 ≡ ΔM` a hlídače úniku escrow | ✅ |
-| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 800 pozemků (40×20), 4 demo firmy, 12 úvodních příkazů | ✅ |
-| **Herní pohled (výchozí):** izometrická mapa světa 40×20 s biomy, budovami, vlastnictvím, zoomem a inspektorem pozemku; HUD s penězi a skladem | ✅ |
+| Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 2048 pozemků (64×32), 4 demo firmy, 12 úvodních příkazů | ✅ |
+| **Herní pohled (výchozí):** izometrická mapa světa 64×32 s biomy, silniční sítí, jezdícími auty, budovami, vlastnictvím, zoomem a inspektorem; HUD s penězi, skladem a herním časem (⏸ 1× 2× 4×) | ✅ |
 | **Sandbox:** průvodce založením firmy (jméno → odvětví → pozemek → stavba), nákup volných pozemků a stavba budov přímo z mapy — vše přes podvojný ledger | ✅ |
 | **Fáze B:** produkční tick (výroba, údržby, retail, státní síť pro elektřinu), questový řetěz se 7 úkoly, progresivní odemykání Terminálu, „Prodat vše“ jedním klikem | ✅ |
+| **Fáze D:** logistika — státní silniční síť, napojení produkce (BFS), najatí stavebníci s výkupem tras, sklady, herní čas s pauzou/zrychlením a Kniha (kodex receptů a příručka) | ✅ |
 | Expertní terminál (volitelný, zúžený na obchodování): přehled trhu s hledáním, order book s hloubkou, zadávání příkazů s odhadem exekuce, moje příkazy, páska obchodů, stavová lišta invariantů | ✅ |
 | Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
 
@@ -66,8 +67,10 @@ apps/web/src/
   api.ts       typovaný klient (relativní cesty → Vite proxy)
   estimate.ts  odhad exekuce proti booku (stejná logika jako engine)
   game/        izometrická projekce (iso.ts) a art direction (art.ts)
-  components/  SetupScreen (průvodce), GameView + WorldMap (herní pohled),
-               TerminalView, BookPanel, TradeTape, Header, Footer (expertní terminál)
+  components/  SetupScreen (průvodce), GameView + WorldMap + TrafficLayer (auta),
+               QuestRail, CodexView (kniha), TerminalView, BookPanel, TradeTape,
+               Header, Footer (expertní terminál)
+  logistics.ts silniční síť, BFS napojení, najatí stavebníci, výkup tras
 apps/web/render-map.tsx  vyrenderuje mapu na SVG pro vizuální kontrolu bez prohlížeče
 tools/
   db/check_ddl.mjs      spuštění DDL na skutečném Postgresu, statement po statementu
@@ -89,6 +92,7 @@ scripts/dev.mjs         spustí API i web najednou
 | 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 4 uzamčena, 3 nová z modelových zjištění, 4 otevřená | 🔶 částečně |
 | 30 | `docs/30-matching-engine.md` | CLOB specifikace, pseudokód, race conditions, testy | ⬜ |
 | 40 | [Onboarding, questy a tick](docs/40-onboarding-questy.md) | questový řetěz, progresivní odemykání, produkční tick, státní síť | ✅ hotovo |
+| 50 | [Logistika, silnice a čas](docs/50-logistika-silnice-cas.md) | silniční síť, napojení produkce, stavební firmy, sklady, herní čas, kodex | ✅ hotovo |
 | 40 | `docs/40-tick-engine.md` | výroba, retail simulace, údržba, lazy evaluation | ⬜ |
 | 50 | `docs/50-realtime.md` | SSE/WS, event schéma, coalescing, reconnect | ⬜ |
 | 60 | `docs/60-mvp-sprint-plan.md` | rozpad na 2týdenní sprinty s akceptačními kritérii | ⬜ |

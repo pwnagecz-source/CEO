@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError, api,
-  type Audit, type Book, type CatalogRow, type Company, type CompanySummary, type Item,
-  type Macro, type MapData, type MapPlot, type OpenOrder, type PlaceOrderResult,
-  type QuestState, type Trade,
+  type Audit, type Book, type CatalogRow, type Clock, type CodexInput, type CodexRecipe,
+  type Company, type CompanySummary, type Item, type Macro, type MapData, type MapPlot,
+  type OpenOrder, type PlaceOrderResult, type QuestState, type RoadQuote, type Trade,
 } from './api'
+import CodexView from './components/CodexView'
 import GameView from './components/GameView'
 import SetupScreen from './components/SetupScreen'
 import TerminalView from './components/TerminalView'
@@ -42,10 +43,13 @@ export default function App() {
   const [itemCode, setItemCode] = useState(DEFAULT_ITEM)
   const [map, setMap] = useState<MapData | null>(null)
   const [quests, setQuests] = useState<QuestState | null>(null)
+  const [clock, setClock] = useState<Clock | null>(null)
+  const [codex, setCodex] = useState<{ recipes: CodexRecipe[]; inputs: CodexInput[] } | null>(null)
+  const [roadQuote, setRoadQuote] = useState<RoadQuote | null>(null)
   const [selectedPlot, setSelectedPlot] = useState<MapPlot | null>(null)
   // Výchozí pohled je HRA. Terminál (expertní) je na jedno kliknutí, ale není to
   // první věc, kterou nový hráč uvidí.
-  const [mode, setMode] = useState<'game' | 'terminal'>('game')
+  const [mode, setMode] = useState<'game' | 'terminal' | 'codex'>('game')
   const [book, setBook] = useState<Book | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [lastSync, setLastSync] = useState<Date | null>(null)
@@ -64,9 +68,9 @@ export default function App() {
     if (inFlight.current) return
     inFlight.current = true
     try {
-      const [h, m, a, it, cos, tr, mp, cat] = await Promise.all([
+      const [h, m, a, it, cos, tr, mp, cat, ck, cx] = await Promise.all([
         api.health(), api.macro(), api.audit(), api.items(), api.companies(), api.trades(),
-        api.map(), api.catalog(),
+        api.map(), api.catalog(), api.clock(), api.codex(),
       ])
       setHealth({
         worldId: h.worldId, engine: h.engine, version: h.version,
@@ -80,6 +84,8 @@ export default function App() {
       setTrades(tr.trades)
       setMap(mp)
       setCatalog(cat.buildings)
+      setClock(ck)
+      setCodex(cx)
       setFatal(null)
 
       const cid = companyId ?? cos.companies[0]?.id ?? null
@@ -161,6 +167,34 @@ export default function App() {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
     await api.quickSell(companyId, itemCode)
   })
+
+  const hireRoad = (p: MapPlot) => void gameAction('Stavební firma pokládá silnici…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.hireRoad(p.id, companyId)
+  })
+
+  async function setSpeed(speed: number) {
+    try {
+      await api.setClock(speed)
+      setClock(await api.clock())
+    } catch (e) {
+      setActErr(e instanceof ApiError ? e.message : String(e))
+    }
+  }
+
+  // Cena napojení: dopočítávám jen když má smysl (vlastní nenapojená budova).
+  useEffect(() => {
+    let alive = true
+    const p = selectedPlot
+    if (!p || !companyId || p.owner_id !== companyId || !p.b_id || p.connected) {
+      setRoadQuote(null)
+      return () => { alive = false }
+    }
+    api.roadQuote(p.id, companyId)
+      .then((q) => { if (alive) setRoadQuote(q) })
+      .catch(() => { if (alive) setRoadQuote(null) })
+    return () => { alive = false }
+  }, [selectedPlot, companyId])
 
   async function place(p: {
     side: 'buy' | 'sell'; qty: number; priceLimit: number | null
@@ -258,9 +292,26 @@ export default function App() {
         onNewCompany={() => setSetup(true)}
         onOpenTerminal={() => setMode('terminal')}
         onQuickSell={quickSell}
+        onHireRoad={hireRoad}
+        onOpenCodex={() => setMode('codex')}
+        onSpeed={(sp) => void setSpeed(sp)}
         quests={quests}
+        clock={clock}
+        roadQuote={roadQuote}
         busy={actBusy}
         err={actErr}
+      />
+    )
+  }
+
+  // ── KNIHA (kodex) ────────────────────────────────────────────────────────
+  if (mode === 'codex') {
+    return (
+      <CodexView
+        recipes={codex?.recipes ?? []}
+        inputs={codex?.inputs ?? []}
+        catalog={catalog}
+        onBack={() => setMode('game')}
       />
     )
   }

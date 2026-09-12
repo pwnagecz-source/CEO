@@ -122,6 +122,7 @@ export async function buyPlot(
     [plotId, worldId],
   )
   if (!plot) throw new MarketError('pozemek nenalezen', 'not_found')
+  if (plot.type === 'road') throw new MarketError('státní silnice není na prodej', 'not_unowned')
   if (plot.status !== 'unowned') throw new MarketError('tenhle pozemek už někdo vlastní', 'not_unowned')
 
   const price = round6(Number(plot.value))
@@ -170,7 +171,11 @@ export async function buildBuilding(
     [buildingCode],
   )
   if (!bt) throw new MarketError(`neznámá budova '${buildingCode}'`, 'unknown_building')
-  if (bt.req !== plot.type) {
+  if (plot.type === 'road') {
+    throw new MarketError('na státní silnici stavět nelze', 'wrong_terrain')
+  }
+  // required_plot_type NULL (silnice) = libovolný terén
+  if (bt.req !== null && bt.req !== plot.type) {
     throw new MarketError(
       `${buildingCode} potřebuje terén „${bt.req}“, tohle je „${plot.type}“`, 'wrong_terrain')
   }

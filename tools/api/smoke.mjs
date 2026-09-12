@@ -205,6 +205,22 @@ const mb = await j('/macro')
 check('makro identita M2 ≡ vytvořeno − zničeno',
   Math.abs(mb.m2 - (mb.moneyCreated - mb.moneyDestroyed)) < 0.01, true)
 
+// ── Fáze D: kodex, hodiny, silniční síť ─────────────────────────────────────
+console.log(`\n[14] kodex, herní hodiny a silniční síť`)
+const codex = await j('/codex')
+check('kodex má recepty (≥25)', codex.recipes.length >= 25, true)
+check('kodex má vstupy vč. energie', codex.inputs.some((i) => i.item === 'power'), true)
+const clk = await j('/clock')
+check('hodiny mají speed 0/1/2/4', [0, 1, 2, 4].includes(clk.speed), true)
+check('špatná rychlost → 400', (await post('/clock', { speed: 3 })).status, 400)
+check('pauza jde nastavit', (await post('/clock', { speed: 0 })).status, 200)
+check('po pauze speed 0', (await j('/clock')).speed, 0)
+await post('/clock', { speed: 1 })
+const mapd = await j('/map')
+check('mapa má státní silnice', mapd.plots.some((p) => p.type === 'road'), true)
+check('mapa hlásí napojení', mapd.plots.some((p) => p.connected === true), true)
+check('audit PASS po Fázi D', (await j('/audit')).verdict, 'PASS')
+
 console.log('\n────────────────────────────────────────────────────────────')
 console.log(` ${pass} ✅   ${fail} ❌   →  ${fail === 0 ? 'VŠECHNO PROŠLO' : 'MÁME PROBLÉM'}`)
 console.log('────────────────────────────────────────────────────────────\n')

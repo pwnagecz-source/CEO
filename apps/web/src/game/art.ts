@@ -25,6 +25,7 @@ export const TERRAIN: Record<string, Terrain> = {
   industrial: { fill: '#59626f', edge: '#7c8794', label: 'průmysl' },
   commercial: { fill: '#a08346', edge: '#cba85f', label: 'komerce' },
   civic:      { fill: '#5d6b8a', edge: '#8291b3', label: 'občanské' },
+  road:       { fill: '#454b57', edge: '#6b7484', label: 'silnice' },
 }
 
 export const FALLBACK_TERRAIN: Terrain = { fill: '#3d4450', edge: '#545c6a', label: 'terén' }
@@ -80,4 +81,5 @@ export const STATUS_GLOW: Record<string, string> = {
   full: '#58a6ff',
   idle: '#93a1bd',
   paused: '#61708c',
+  disconnected: '#e07a5f',
 }

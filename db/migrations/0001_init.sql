@@ -38,7 +38,8 @@ CREATE TYPE plot_type AS ENUM (
     'utility',     -- Power Plant (20)
     'industrial',  -- všechny továrny (100)
     'commercial',  -- obchody, lahůdky — bonus foot traffic (60)
-    'civic'        -- rezervováno: HQ, landmarky, aukce (20)
+    'civic',       -- rezervováno: HQ, landmarky, aukce (20)
+    'road'         -- státní silniční síť: neprodejné, produkce musí být napojená
 );
 
 CREATE TYPE plot_status AS ENUM ('unowned', 'auction', 'owned', 'leased');
@@ -50,6 +51,7 @@ CREATE TYPE building_status AS ENUM (
     'starved',       -- chybí vstupy
     'full',          -- výstupní sklad plný ← offline ventil, viz doc 10 §2.1
     'paused',        -- hráč pozastavil (neplatí upkeep za produkci, platí nájem)
+    'disconnected',  -- Fáze D: bez silničního napojení na státní síť
     'demolishing'
 );
 
@@ -129,6 +131,9 @@ CREATE TABLE worlds (
     plot_grid_w     smallint    NOT NULL DEFAULT 24,
     plot_grid_h     smallint    NOT NULL DEFAULT 12,
     starting_capital numeric(24,6) NOT NULL DEFAULT 25000,
+    -- Fáze D: viditelný herní čas. sim_speed 0 = pauza, 1/2/4 = zrychlení.
+    sim_speed       smallint    NOT NULL DEFAULT 1,
+    sim_hours       numeric(20,4) NOT NULL DEFAULT 0,
     config          jsonb       NOT NULL DEFAULT '{}'::jsonb,
     created_at      timestamptz NOT NULL DEFAULT now(),
 
@@ -137,7 +142,8 @@ CREATE TABLE worlds (
                                              AND plot_grid_h BETWEEN 4 AND 256),
     CONSTRAINT worlds_window_valid    CHECK (ends_at IS NULL OR starts_at IS NULL
                                              OR ends_at > starts_at),
-    CONSTRAINT worlds_capital_positive CHECK (starting_capital >= 0)
+    CONSTRAINT worlds_capital_positive CHECK (starting_capital >= 0),
+    CONSTRAINT worlds_sim_speed_known  CHECK (sim_speed IN (0, 1, 2, 4))
 );
 -- `code` je globálně unikátní slug ('eu-s01'), takže (code, season_no) by bylo
 -- redundantní. Místo toho index pro dotaz „nejnovější sezóna dané řady".

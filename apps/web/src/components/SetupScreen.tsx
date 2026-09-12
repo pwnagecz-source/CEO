@@ -25,6 +25,7 @@ const INDUSTRY_ORDER = [
 const SITE_LABEL: Record<string, string> = {
   water: 'voda / pole', forest: 'les', mine: 'důl / lom', utility: 'energetická zóna',
   commercial: 'komerční centrum', civic: 'občanské', industrial: 'průmyslová zóna',
+  road: 'státní silnice',
 }
 
 type Props = {

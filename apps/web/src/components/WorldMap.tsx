@@ -11,6 +11,8 @@ type Props = {
   myCompanyId: string | null
   selectedPlotId: string | null
   onSelectPlot: (plot: MapPlot | null) => void
+  /** rychlost herních hodin (0 = pauza → auta stojí) */
+  clockSpeed: number
 }
 
 /** Deterministický „náhodný“ detail terénu (stromy, skály) — stabilní mezi rendery. */
@@ -272,6 +274,129 @@ const Tile = memo(function Tile({ plot, myCompanyId, isSel, isHover, onSelect, o
 
 type View = { x: number; y: number; w: number; h: number }
 
+/* ── doprava: auta s modely, která opravdu jezdí po silnicích ─────────────── */
+
+type Route = { pts: Pt[]; cum: number[]; len: number }
+
+/** Izometrická dodávka: stín + korba + kabina. Malá, ale čitelná i oddáleně. */
+function Truck({ g }: { g: React.RefObject<SVGGElement | null> }) {
+  return (
+    <g ref={g} style={{ willChange: 'transform' }}>
+      <ellipse cx={0} cy={1.5} rx={7} ry={3} fill="#000" opacity={0.28} />
+      {/* korba */}
+      <polygon points="-6,-1 0,2 0,-4 -6,-7" fill="#8a5a3b" />
+      <polygon points="0,2 6,-1 6,-7 0,-4" fill="#b07a4e" />
+      <polygon points="-6,-7 0,-4 6,-7 0,-10" fill="#d09a66" />
+      {/* kabina */}
+      <polygon points="3,-1 6,0.5 6,-3.5 3,-5" fill="#3f4a5a" />
+      <polygon points="6,0.5 8.5,-0.7 8.5,-4.7 6,-3.5" fill="#55637a" />
+      <polygon points="3,-5 6,-3.5 8.5,-4.7 5.5,-6.2" fill="#74869f" />
+      {/* kola */}
+      <ellipse cx={-3.5} cy={0.6} rx={1.5} ry={0.9} fill="#14181f" />
+      <ellipse cx={3.5} cy={0.2} rx={1.5} ry={0.9} fill="#14181f" />
+    </g>
+  )
+}
+
+function pointAt(route: Route, t: number): Pt {
+  const d = t * route.len
+  let i = 1
+  while (i < route.cum.length - 1 && route.cum[i] < d) i++
+  const seg = route.cum[i] - route.cum[i - 1] || 1
+  const f = (d - route.cum[i - 1]) / seg
+  const a = route.pts[i - 1]; const b = route.pts[i]
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f }
+}
+
+/**
+ * Spočítá trasy pro auta: od státního tahu po souvislé síti k produkčním
+ * budovám a zpět. BFS je multi-source ze všech státních dlaždic, takže
+ * „parent“ řetěz dá nejkratší cestu k síti pro kteroukoli dlaždici.
+ */
+function buildRoutes(map: MapData): Route[] {
+  const byPos = new Map<string, MapPlot>()
+  for (const p of map.plots) byPos.set(`${p.x},${p.y}`, p)
+  const isRoad = (p: MapPlot) => p.type === 'road' || p.b_code === 'road'
+  const roads = map.plots.filter(isRoad)
+  const parent = new Map<string, string | null>()
+  const queue: MapPlot[] = []
+  for (const r of roads) if (r.type === 'road') { parent.set(`${r.x},${r.y}`, null); queue.push(r) }
+  while (queue.length > 0) {
+    const t = queue.shift()!
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const k = `${t.x + dx},${t.y + dy}`
+      if (parent.has(k)) continue
+      const n = byPos.get(k)
+      if (n && isRoad(n)) { parent.set(k, `${t.x},${t.y}`); queue.push(n) }
+    }
+  }
+  const routes: Route[] = []
+  for (const p of map.plots) {
+    if (!p.b_id || p.b_status !== 'producing' || !p.connected) continue
+    if (routes.length >= 40) break
+    let entry: string | null = null
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const k = `${p.x + dx},${p.y + dy}`
+      if (parent.has(k)) { entry = k; break }
+    }
+    if (!entry) continue
+    const pts: Pt[] = [tileCenter(p.x, p.y)]
+    let cur: string | null = entry
+    while (cur) {
+      const [x, y] = [Number(cur.split(',')[0]), Number(cur.split(',')[1])]
+      pts.push(tileCenter(x, y))
+      cur = parent.get(cur) ?? null
+    }
+    pts.reverse() // od hlavního tahu k budově
+    const cum = [0]
+    let len = 0
+    for (let i = 1; i < pts.length; i++) {
+      len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
+      cum.push(len)
+    }
+    if (len > 1) routes.push({ pts, cum, len })
+  }
+  return routes
+}
+
+/** Vrstva aut: rAF smyčka posouvá dodávky po trasách (ping-pong tam a zpět). */
+function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number }) {
+  const routes = useMemo(() => buildRoutes(map), [map])
+  const refs = useRef<Array<React.RefObject<SVGGElement | null>>>([])
+  refs.current = routes.map((_, i) => refs.current[i] ?? { current: null })
+  const speedRef = useRef(clockSpeed)
+  speedRef.current = clockSpeed
+
+  useEffect(() => {
+    let raf = 0
+    let last = performance.now()
+    let clock = 0
+    const step = (now: number) => {
+      const dt = now - last
+      last = now
+      clock += dt * (0.00006 * speedRef.current)   // 0 = pauza → auta stojí
+      routes.forEach((r, i) => {
+        const el = refs.current[i]?.current
+        if (!el) return
+        const u = (clock + i * 0.37) % 2
+        const t = u < 1 ? u : 2 - u
+        const p = pointAt(r, t)
+        el.setAttribute('transform', `translate(${p.x.toFixed(1)},${(p.y - 2).toFixed(1)})`)
+      })
+      raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [routes])
+
+  if (routes.length === 0) return null
+  return (
+    <g className="traffic" pointerEvents="none">
+      {routes.map((_, i) => <Truck key={i} g={refs.current[i]} />)}
+    </g>
+  )
+}
+
 /**
  * Izometrická mapa světa — herní pohled.
  *
@@ -281,7 +406,7 @@ type View = { x: number; y: number; w: number; h: number }
  * K velkému světu (40×20 = 800 pozemků) patří ovládání kamery: kolečko = zoom
  * na kurzor, tažení = posun, dvojklik / tlačítko ⤢ = celý svět.
  */
-export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlot }: Props) {
+export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlot, clockSpeed }: Props) {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [view, setView] = useState<View | null>(null)
@@ -393,6 +518,8 @@ export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlo
             onHover={onHover}
           />
         ))}
+
+        {map && <TrafficLayer map={map} clockSpeed={clockSpeed} />}
       </svg>
 
       <div className="map-tools">

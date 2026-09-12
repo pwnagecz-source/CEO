@@ -116,7 +116,7 @@ export type MapPlot = {
   b_id: string | null; b_code: string | null; b_name: string | null
   b_level: number | null; b_status: string | null; b_retail: boolean | null
   b_output: string | null; b_industry: string | null; b_tier: number | null
-  richness: number; assessed_value: number
+  richness: number; assessed_value: number; connected: boolean
 }
 
 export type MapData = {
@@ -134,6 +134,17 @@ export type QuestState = {
   active: Quest | null
   terminalUnlocked: boolean
 }
+
+export type Clock = { speed: number; hours: number; day: number; hour: number }
+
+export type CodexRecipe = {
+  code: string; building: string; building_name: string; output: string
+  output_name: string; tier: number; qty: number; plot_type: string | null
+  throughput: number
+}
+export type CodexInput = { recipe: string; item: string; item_name: string; qty: number }
+
+export type RoadQuote = { tiles: number; cost: number; path: { id: string; x: number; y: number }[] }
 
 export type CatalogRow = {
   code: string; name: string; industry: string; plot_type: string
@@ -192,6 +203,15 @@ export const api = {
       `/orders/${orderId}?companyId=${companyId}`, { method: 'DELETE' }),
   catalog: () => req<{ buildings: CatalogRow[] }>('/buildings/catalog'),
   quests: (companyId: string | number) => req<QuestState>(`/companies/${companyId}/quests`),
+  clock: () => req<Clock>('/clock'),
+  setClock: (speed: number) =>
+    req<{ speed: number }>('/clock', { method: 'POST', body: JSON.stringify({ speed }) }),
+  codex: () => req<{ recipes: CodexRecipe[]; inputs: CodexInput[] }>('/codex'),
+  roadQuote: (plotId: string | number, companyId: string | number) =>
+    req<RoadQuote>(`/plots/${plotId}/road-quote?companyId=${companyId}`),
+  hireRoad: (plotId: string | number, companyId: string | number) =>
+    req<{ tiles: number; cost: number }>(`/plots/${plotId}/hire-road`, {
+      method: 'POST', body: JSON.stringify({ companyId }) }),
   quickSell: (companyId: string | number, itemCode: string) =>
     req<{ orderId: number; qtyFilled: number; avgPrice: number | null; totalGross: number }>(
       `/companies/${companyId}/quicksell`, {

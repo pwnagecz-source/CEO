@@ -1,4 +1,6 @@
-import type { Audit, CatalogRow, Company, Macro, MapData, MapPlot, QuestState } from '../api'
+import type {
+  Audit, CatalogRow, Clock, Company, Macro, MapData, MapPlot, QuestState, RoadQuote,
+} from '../api'
 import { compact, money, pct } from '../fmt'
 import { STATUS_GLOW, TERRAIN, terrainFor } from '../game/art'
 import { ownerColor } from '../game/iso'
@@ -21,7 +23,12 @@ type Props = {
   onNewCompany: () => void
   onOpenTerminal: () => void
   onQuickSell: (itemCode: string) => void
+  onHireRoad: (plot: MapPlot) => void
+  onOpenCodex: () => void
+  onSpeed: (speed: number) => void
   quests: QuestState | null
+  clock: Clock | null
+  roadQuote: RoadQuote | null
   busy: string | null
   err: string | null
 }
@@ -38,7 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function GameView({
   map, catalog, company, companies, companyId, onSelectCompany, macro, audit,
   selectedPlot, onSelectPlot, onBuy, onBuild, onNewCompany, onOpenTerminal, onQuickSell,
-  quests, busy, err,
+  onHireRoad, onOpenCodex, onSpeed, quests, clock, roadQuote, busy, err,
 }: Props) {
   const terminalLocked = quests !== null && !quests.terminalUnlocked
   const myPlots = map?.plots.filter((p) => p.owner_id === companyId) ?? []
@@ -62,6 +69,21 @@ export default function GameView({
           >
             {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          <div className="hud-clock" title="Herní čas: tick = jedna hodina">
+            <span className="hud-clock__label">
+              🗓 Den {clock?.day ?? 1} · {String(clock?.hour ?? 0).padStart(2, '0')}:00
+            </span>
+            <div className="hud-speed">
+              {[0, 1, 2, 4].map((sp) => (
+                <button key={sp}
+                  className={'hud-speed__btn' + ((clock?.speed ?? 1) === sp ? ' is-sel' : '')}
+                  title={sp === 0 ? 'Pauza' : `Rychlost ${sp}×`}
+                  onClick={() => onSpeed(sp)}>
+                  {sp === 0 ? '⏸' : `${sp}×`}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="hud-stat">
             <span className="hud-k">Peníze</span>
             <span className="hud-v money">{money(cash)}</span>
@@ -85,6 +107,7 @@ export default function GameView({
         </div>
         <div className="hud-right">
           {audit && <span className={`badge ${audit.ok ? 'pass' : 'fail'}`}>{audit.ok ? 'svět v pořádku' : 'pozor'}</span>}
+          <button className="ghost" onClick={onOpenCodex}>📖 Kniha</button>
           <button className="ghost" onClick={onNewCompany}>＋ Nová firma</button>
           <button
             className={'ghost' + (terminalLocked ? ' is-locked' : '')}
@@ -106,6 +129,7 @@ export default function GameView({
             myCompanyId={companyId}
             selectedPlotId={selectedPlot?.id ?? null}
             onSelectPlot={onSelectPlot}
+            clockSpeed={clock?.speed ?? 1}
           />
           <div className="map-legend">
             {Object.entries(TERRAIN).filter(([k]) => k !== 'unowned').map(([k, t]) => (
@@ -151,6 +175,25 @@ export default function GameView({
                 </div>
               ) : (
                 <div className="insp-owner dim">volný pozemek · {money(selectedPlot.assessed_value)}</div>
+              )}
+
+              {selectedPlot.b_id && selectedPlot.owner_id === companyId && !selectedPlot.connected && (
+                <div className="insp-road">
+                  <strong>🚧 Bez silnice.</strong>
+                  <p className="dim">
+                    Produkce stojí, dokud pozemek nenapojíš na státní síť.
+                    {roadQuote && <> Nejkratší trasa: <strong>{roadQuote.tiles} dl.</strong> za{' '}
+                      <strong>{money(roadQuote.cost)}</strong>.</>}
+                  </p>
+                  <button className="btn btn--primary wide" disabled={!!busy}
+                    onClick={() => onHireRoad(selectedPlot)}>
+                    🚜 Najmout stavební firmu
+                  </button>
+                  <p className="dim">
+                    …nebo kup sousední pozemky a postav „Silnici“ sám — vyjde to stejně,
+                    jen to naklikáš.
+                  </p>
+                </div>
               )}
 
               {selectedPlot.b_id ? (

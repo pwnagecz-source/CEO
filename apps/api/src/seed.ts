@@ -35,8 +35,8 @@ type Seed = {
 }
 
 /** Rozměr světa. Default výrazně větší než původních 24×12; přes env laditelné. */
-const GRID_W = Number(process.env.WORLD_W ?? 40)
-const GRID_H = Number(process.env.WORLD_H ?? 20)
+const GRID_W = Number(process.env.WORLD_W ?? 64)
+const GRID_H = Number(process.env.WORLD_H ?? 32)
 
 const WORLD_CODE = process.env.WORLD_CODE ?? 'dev-s01'
 
@@ -130,10 +130,23 @@ function layoutPlots(w: number, h: number) {
     (x === u1 || x === u1 + 1 || x === u2 || x === u2 + 1) && y < h - waterRows,
     'utility', total)
 
+  // Hlavní státní tahy: vodorovná + svislá osa PROTNOUT město (bulváry),
+  // takže silniční síť existuje dřív, než se rozparceluje centrum.
+  const hy = Math.floor(h / 2), vx = Math.floor(w / 2)
+  take((_x, y) => y === hy, 'road', total)
+  take((x) => x === vx, 'road', total)
+
   // komerce = centrum města, civic = malé jádro, průmysl = všechno ostatní
   const cw = Math.round(w * 0.30), ch = Math.round(h * 0.34)
   take((x, y) => Math.abs(x - w / 2) <= cw / 2 && Math.abs(y - h / 2) <= ch / 2,
        'commercial', frac(0.15))
+  // okruh kolem centra: město má páteř, na kterou se hráč napojuje
+  const cx0 = Math.round(w / 2 - cw / 2) - 1, cx1 = Math.round(w / 2 + cw / 2) + 1
+  const cy0 = Math.round(h / 2 - ch / 2) - 1, cy1 = Math.round(h / 2 + ch / 2) + 1
+  take((x, y) =>
+    ((x === cx0 || x === cx1) && y >= cy0 && y <= cy1) ||
+    ((y === cy0 || y === cy1) && x >= cx0 && x <= cx1), 'road', total)
+
   take((x, y) => Math.abs(x - w / 2) <= 1 && Math.abs(y - h / 2) <= 1, 'civic', frac(0.02))
   take(() => true, 'industrial', total)
 
@@ -245,6 +258,29 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
     }
   }
 
+  // ---- budovy Fáze D: silnice a sklad (nejsou v balance JSON) ---------------
+  // Silnice = logistická páteř: produkce bez napojení na státní síť neběží.
+  // Sklad = kapacita navíc pro celou firmu (tick ji přičítá ke skladům budov).
+  for (const [code, name, plot, capex, upkeep, storage, seconds, desc] of [
+    ['road', 'Silnice', null, 150, 0.4, 1, 5,
+      'Napojení na státní síť. Bez cesty k hlavnímu tahu produkce stojí.'],
+    ['warehouse', 'Sklad', 'industrial', 1200, 3, 2500, 60,
+      'Přidává skladovou kapacitu všem provozům firmy.'],
+  ] as Array<[string, string, string | null, number, number, number, number, string]>) {
+    const r = await one<{ id: string }>(
+      d,
+      `INSERT INTO building_types
+         (code, name, industry_id, required_plot_type, base_capex, base_upkeep_hour,
+          base_throughput, base_storage, base_build_seconds, max_level,
+          level_throughput_mult, level_upkeep_mult, level_storage_mult,
+          upgrade_cost_mult, upgrade_cost_growth, base_workers, is_retail, description)
+       VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,3,0.30,0.22,0.35,0.75,1.85,0,false,$9)
+       RETURNING id`,
+      [code, name, industryId['construction'], plot, capex, upkeep, storage, seconds, desc],
+    )
+    buildingTypeId[code] = Number(r!.id)
+  }
+
   // ---- pozemky --------------------------------------------------------------
   const cells = layoutPlots(GRID_W, GRID_H)
   for (const c of cells) {
@@ -267,6 +303,7 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
     'sink_upkeep', 'sink_hq_overhead', 'sink_capex', 'sink_demolition',
     'sink_research', 'sink_wealth_tax', 'sink_auction_burn', 'sink_transport',
     'sink_storage_rent', 'sink_contract_tax', 'sink_loan_interest',
+    'sink_land_purchase', 'sink_utilities',
   ]
   for (const k of systemKinds) {
     await d.query(

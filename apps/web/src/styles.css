@@ -616,6 +616,89 @@ footer.bottom {
 .summary > div:nth-child(odd) { background: rgba(255,255,255,.03); }
 .summary span { color: var(--text-dim); }
 
+/* ── herní hodiny v HUD ───────────────────────────────────────────────── */
+.hud-clock { display: flex; flex-direction: column; gap: 4px; }
+.hud-clock__label {
+  font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums;
+  color: var(--text); letter-spacing: .02em;
+}
+.hud-speed { display: inline-flex; gap: 3px; background: rgba(6,10,18,.5);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px; }
+.hud-speed__btn {
+  border: none; background: transparent; color: var(--text-faint); cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; padding: 3px 8px; border-radius: 999px;
+  transition: all .14s;
+}
+.hud-speed__btn:hover { color: var(--text); background: var(--hover); }
+.hud-speed__btn.is-sel { background: var(--grad); color: #06101f; font-weight: 700; }
+
+/* silniční napojení v inspektoru */
+.insp-road {
+  border-radius: var(--r); padding: 12px; border: 1px solid rgba(224,122,95,.4);
+  background: linear-gradient(160deg, rgba(224,122,95,.14), transparent 70%);
+  display: flex; flex-direction: column; gap: 8px; font-size: 12px;
+}
+.insp-road p { margin: 0; }
+.insp-road .btn { margin-top: 2px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   KNIHA (KODEX)
+   ══════════════════════════════════════════════════════════════════════ */
+.codex { min-height: 100%; overflow-y: auto; padding: 18px clamp(14px, 4vw, 48px) 60px; }
+.codex__head {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding-bottom: 14px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+  position: sticky; top: 0; z-index: 5; background: rgba(7,11,18,.86);
+  backdrop-filter: blur(14px);
+}
+.codex__head h1 {
+  margin: 0; font-size: clamp(20px, 3vw, 30px); letter-spacing: -.02em;
+  background: linear-gradient(120deg, #fff 10%, #c9b8ff 90%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.codex__tabs { display: flex; gap: 6px; margin-left: auto; }
+.codex__tab {
+  border: 1px solid var(--border-strong); background: var(--raised); color: var(--text-dim);
+  border-radius: 999px; padding: 7px 16px; font-family: var(--sans); font-size: 12px;
+  font-weight: 650; cursor: pointer; transition: all .16s;
+}
+.codex__tab:hover { color: var(--text); border-color: rgba(255,255,255,.3); }
+.codex__tab.is-sel { background: var(--grad); border-color: transparent; color: #06101f; }
+
+.codex__section { margin-bottom: 26px; }
+.codex__section h2 {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent-2);
+  margin: 0 0 12px; font-weight: 750;
+}
+.codex__grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px;
+}
+.recipe {
+  border-radius: var(--r); border: 1px solid var(--border); padding: 12px 13px;
+  background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.015));
+  display: flex; flex-direction: column; gap: 7px;
+}
+.recipe header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.recipe__out { font-size: 14px; font-weight: 700; }
+.recipe__qty { font-family: var(--mono); font-size: 11px; color: var(--bid); }
+.recipe__building { font-size: 11.5px; color: var(--text-dim); }
+.recipe__building em {
+  font-style: normal; color: var(--accent); background: rgba(88,166,255,.1);
+  border-radius: 999px; padding: 1px 7px; margin-left: 6px; font-size: 10px;
+}
+.recipe__ins { display: flex; flex-wrap: wrap; gap: 5px; }
+.recipe__in {
+  font-size: 10.5px; font-family: var(--mono); color: var(--text-dim);
+  background: rgba(255,107,125,.08); border: 1px solid rgba(255,107,125,.25);
+  border-radius: 999px; padding: 2px 8px;
+}
+.recipe__in b { color: var(--ask); }
+.codex__table { font-size: 12px; }
+.codex__table td, .codex__table th { padding: 6px 9px; }
+.codex__book { max-width: 760px; }
+.codex__book p { color: var(--text-dim); font-size: 13.5px; line-height: 1.65; margin: 0 0 14px; }
+.codex__book strong { color: var(--text); }
+
 /* ══════════════════════════════════════════════════════════════════════
    QUEST RAIL — učitel herní smyčky
    ══════════════════════════════════════════════════════════════════════ */

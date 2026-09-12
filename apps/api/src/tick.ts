@@ -22,6 +22,7 @@
  * mezi skladovými položkami.
  */
 import { balance, post, round6 } from './ledger.ts'
+import { isPlotConnected, roadNetwork } from './logistics.ts'
 import type { Db } from './db.ts'
 import { many, one, tx } from './db.ts'
 
@@ -103,9 +104,33 @@ async function takeItems(d: Db, rowId: number, qty: number) {
  * Vrací shrnutí pro log (kolik budov co dělalo).
  */
 export async function runTick(d: Db, worldId: number) {
-  const buildings = await many<Building>(
+  // Herní hodiny: sim_speed 0 = pauza (tick nic nedělá), 1/2/4 = kolik
+  // herních hodin tento tick představuje (výroba i údržby se škálují).
+  const clock = await one<{ speed: number; hours: string }>(
+    d,
+    `SELECT sim_speed::int AS speed, sim_hours::text AS hours FROM worlds WHERE id=$1`,
+    [worldId],
+  )
+  const cycles = clock?.speed ?? 1
+  if (cycles === 0) return { produced: 0, sold: 0, upkeep: 0, paused: true }
+
+  const net = await roadNetwork(d, worldId)
+  const warehouses = await many<{ company_id: number; storage: number }>(
+    d,
+    `SELECT b.company_id::int AS company_id, bt.base_storage::float8 AS storage
+       FROM buildings b JOIN building_types bt ON bt.id = b.type_id
+      WHERE b.world_id=$1 AND bt.code='warehouse'`,
+    [worldId],
+  )
+  const whExtra = new Map<number, number>()
+  for (const w of warehouses) {
+    whExtra.set(w.company_id, (whExtra.get(w.company_id) ?? 0) + w.storage)
+  }
+
+  const buildings = await many<Building & { x: number; y: number; has_recipe: boolean }>(
     d,
     `SELECT b.id::int, b.company_id::int, b.plot_id::int, b.level::int, b.status::text,
+            p.x::int AS x, p.y::int AS y, (r.id IS NOT NULL) AS has_recipe,
             bt.code AS b_code, bt.is_retail,
             bt.base_storage::float8 AS storage,
             bt.base_upkeep_hour::float8 AS upkeep,
@@ -115,6 +140,7 @@ export async function runTick(d: Db, worldId: number) {
             oi.retail_base::float8 AS retail_base
        FROM buildings b
        JOIN building_types bt ON bt.id = b.type_id
+       JOIN plots p ON p.id = b.plot_id
        LEFT JOIN recipes r  ON r.building_type_id = bt.id AND r.is_active
        LEFT JOIN items oi   ON oi.id = r.output_item_id
       WHERE b.world_id = $1
@@ -156,18 +182,25 @@ export async function runTick(d: Db, worldId: number) {
       continue
     }
 
+    // Fáze D: bez silničního napojení produkce stojí (ani údržby neběží)
+    if (b.has_recipe && !isPlotConnected(net, b.x, b.y)) {
+      await d.query(`UPDATE buildings SET status='disconnected', last_settled_at=now() WHERE id=$1`, [b.id])
+      continue
+    }
+
     const cash = await balance(d, worldId, { type: 'company', id: b.company_id }, 'cash')
+    const upkeep = round6(b.upkeep * cycles)
 
     // 1) údržba: bez peněz se neprojede → paused
-    if (b.upkeep > 0) {
-      if (cash < b.upkeep) {
+    if (upkeep > 0) {
+      if (cash < upkeep) {
         await d.query(`UPDATE buildings SET status='paused', last_settled_at=now() WHERE id=$1`, [b.id])
         continue
       }
       await post(d, worldId, [
-        { party: { type: 'company', id: b.company_id }, kind: 'cash', amount: -b.upkeep,
+        { party: { type: 'company', id: b.company_id }, kind: 'cash', amount: -upkeep,
           moneyFlow: 'sink', refType: 'building', refId: b.id },
-        { party: { type: 'system' }, kind: 'sink_upkeep', amount: b.upkeep,
+        { party: { type: 'system' }, kind: 'sink_upkeep', amount: upkeep,
           moneyFlow: 'sink', refType: 'building', refId: b.id },
       ], { kind: 'upkeep' })
       upkeepPaid++
@@ -183,14 +216,15 @@ export async function runTick(d: Db, worldId: number) {
         `SELECT COALESCE(SUM(quantity),0)::float8 AS q FROM inventory_items WHERE inventory_id=$1`,
         [invId],
       )
-      const free = Math.max(0, b.storage - (used?.q ?? 0))
+      const capacity = b.storage + (whExtra.get(b.company_id) ?? 0)
+      const free = Math.max(0, capacity - (used?.q ?? 0))
       const need = inputsByRecipe.get(b.recipe_id) ?? []
 
       if (free <= 0.0001) {
         status = 'full'
       } else if (need.length === 0) {
         // extraktor: bere z ložiska, ne ze skladu
-        const qty = Math.min(b.output_qty, free)
+        const qty = Math.min(b.output_qty * cycles, free)
         await addItems(d, invId, b.output_item_id, qty)
         produced++
         status = 'producing'
@@ -203,22 +237,24 @@ export async function runTick(d: Db, worldId: number) {
         }
         const haveOf = (code: string) =>
           stock!.filter((s) => s.code === code).reduce((s, r) => s + r.avail, 0)
-        const powerNeed = need.find((n) => n.code === 'power')
+        // vstupy i výstup se škálují počtem hodin tohoto ticku
+        const scaled = need.map((n) => ({ ...n, qty: n.qty * cycles }))
+        const powerNeed = scaled.find((n) => n.code === 'power')
         const powerDeficit = powerNeed ? Math.max(0, powerNeed.qty - haveOf('power')) : 0
         // Regulovaný tarif státní sítě: +15 % proti referenční ceně. Kdyby si hráč
         // postavil vlastní elektrárnu, prodá mu ji někdo levěji → motivace stavět.
         const tariff = powerNeed ? round6(powerDeficit * powerNeed.base_price * 1.15) : 0
-        const materialsOk = need
+        const materialsOk = scaled
           .filter((n) => n.code !== 'power')
           .every((n) => haveOf(n.code) >= n.qty - 1e-9)
-        const cashLeft = cash - (b.upkeep > 0 ? b.upkeep : 0)
+        const cashLeft = cash - upkeep
 
         if (!materialsOk) {
           status = 'starved'          // chybí surovina, ne energie
         } else if (cashLeft < tariff) {
           status = 'paused'           // není na elektřinu ze sítě
         } else {
-          for (const n of need) {
+          for (const n of scaled) {
             let left = n.qty
             for (const row of stock!.filter((s) => s.code === n.code && s.avail > 0)) {
               if (left <= 0) break
@@ -237,7 +273,7 @@ export async function runTick(d: Db, worldId: number) {
               ], { kind: 'utilities_purchase' })
             }
           }
-          const qty = Math.min(b.output_qty, free)
+          const qty = Math.min(b.output_qty * cycles, free)
           await addItems(d, invId, b.output_item_id, qty)
           produced++
           status = 'producing'
@@ -255,7 +291,7 @@ export async function runTick(d: Db, worldId: number) {
           LIMIT 1`,
         [invId, b.output_item_id],
       )
-      const sellQty = Math.min(row?.avail ?? 0, Math.max(b.throughput * 0.25, 1))
+      const sellQty = Math.min(row?.avail ?? 0, Math.max(b.throughput * 0.25, 1) * cycles)
       if (row && sellQty > 0) {
         const gross = round6(sellQty * b.retail_base)
         await takeItems(d, Number(row.id), sellQty)
@@ -276,7 +312,11 @@ export async function runTick(d: Db, worldId: number) {
     )
   }
 
-  return { produced, sold, upkeep: upkeepPaid }
+  await d.query(
+    `UPDATE worlds SET sim_hours = sim_hours + $2 WHERE id=$1`,
+    [worldId, cycles],
+  )
+  return { produced, sold, upkeep: upkeepPaid, paused: false }
 }
 
 /**

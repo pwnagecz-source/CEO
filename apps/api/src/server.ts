@@ -15,6 +15,9 @@ import {
 } from './market.ts'
 import { seedIfEmpty, worldInfo } from './seed.ts'
 import { buildBuilding, buyPlot, catalog, createCompany, quickSell } from './game.ts'
+import {
+  hireRoadBuilders, isPlotConnected, roadNetwork, shortestRoadPath,
+} from './logistics.ts'
 import { questState } from './quests.ts'
 import { startTick, TICK_MS } from './tick.ts'
 
@@ -118,7 +121,70 @@ async function boot() {
         ORDER BY p.y, p.x`,
       [worldId],
     )
-    return { grid: { w: grid?.w ?? 24, h: grid?.h ?? 12 }, plots }
+    // napojení na silniční síť: UI podle toho kreslí auta a hlásí „bez cesty“
+    const net = await roadNetwork(db, worldId)
+    return {
+      grid: { w: grid?.w ?? 64, h: grid?.h ?? 32 },
+      plots: plots.map((p) => ({ ...p, connected: isPlotConnected(net, p.x, p.y) })),
+    }
+  })
+
+  // ----------------------------------------------------------------- codex ---
+  /**
+   * „Kniha“: recepty (vstupy → výstupy) pro herní kodex.
+   * Hráč se tak DOČTE produkční řetězce, aniž by musel číst balance JSON.
+   */
+  app.get('/api/codex', async () => {
+    const recipes = await many<{
+      code: string; building: string; building_name: string; output: string
+      output_name: string; tier: number; qty: number; plot_type: string | null
+      throughput: number
+    }>(
+      db,
+      `SELECT r.code, bt.code AS building, bt.name AS building_name,
+              oi.code AS output, oi.name AS output_name, oi.tier::int AS tier,
+              r.output_qty::float8 AS qty,
+              bt.required_plot_type::text AS plot_type,
+              bt.base_throughput::float8 AS throughput
+         FROM recipes r
+         JOIN building_types bt ON bt.id = r.building_type_id
+         JOIN items oi ON oi.id = r.output_item_id
+        ORDER BY oi.tier, bt.code`,
+    )
+    const inputs = await many<{ recipe: string; item: string; item_name: string; qty: number }>(
+      db,
+      `SELECT r.code AS recipe, i.code AS item, i.name AS item_name,
+              ri.qty::float8 AS qty
+         FROM recipe_inputs ri
+         JOIN recipes r ON r.id = ri.recipe_id
+         JOIN items i ON i.id = ri.item_id
+        ORDER BY r.code, i.tier`,
+    )
+    return { recipes, inputs }
+  })
+
+  // ----------------------------------------------------------------- clock ---
+  /** Herní hodiny: viditelný čas + rychlost (0 = pauza, 1/2/4). */
+  app.get('/api/clock', async () => {
+    const w = await one<{ speed: number; hours: string }>(
+      db,
+      `SELECT sim_speed::int AS speed, sim_hours::text AS hours
+         FROM worlds WHERE id=$1`,
+      [worldId],
+    )
+    const hours = Number(w?.hours ?? 0)
+    return {
+      speed: w?.speed ?? 1, hours,
+      day: Math.floor(hours / 24) + 1, hour: Math.floor(hours % 24),
+    }
+  })
+  app.post<{ Body: { speed: number } }>('/api/clock', async (req, reply) => {
+    const sp = Number(req.body?.speed)
+    if (![0, 1, 2, 4].includes(sp)) {
+      return reply.code(400).send({ error: 'speed musí být 0, 1, 2 nebo 4' })
+    }
+    await db.query(`UPDATE worlds SET sim_speed=$1 WHERE id=$2`, [sp, worldId])
+    return { speed: sp }
   })
 
   app.get('/api/macro', async () => {
@@ -427,6 +493,30 @@ async function boot() {
       try {
         return await tx((t) =>
           quickSell(t, worldId, Number(req.params.id), code))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Cena napojení předem: kolik dlaždic a peněz stavební firma chce. */
+  app.get<{ Params: { id: string }; Querystring: { companyId: string } }>(
+    '/api/plots/:id/road-quote', async (req, reply) => {
+      const found = await shortestRoadPath(
+        db, worldId, Number(req.params.id), Number(req.query.companyId))
+      if (!found) return reply.code(404).send({ error: 'není kudy napojit', code: 'no_route' })
+      return { tiles: found.path.length, cost: found.cost,
+               path: found.path.map((p) => ({ id: p.id, x: p.x, y: p.y })) }
+    })
+
+  /** Najmutí stavební firmy: vykoupí trasu a postaví silnici k státní síti. */
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/plots/:id/hire-road', async (req, reply) => {
+      try {
+        return await tx((t) =>
+          hireRoadBuilders(t, worldId, Number(req.body?.companyId), Number(req.params.id)))
       } catch (e) {
         if (e instanceof MarketError) {
           return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
