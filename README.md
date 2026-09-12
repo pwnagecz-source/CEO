@@ -13,9 +13,10 @@ Inspirace: **Capital Rift** (hráči řízený order book, live P&L, logistika) 
 
 | # | Dokument | Obsah | Stav |
 |---|---|---|---|
-| 00 | [Vize a koncept](docs/00-vize-a-koncept.md) | pilíře, core loop, ekonomické toky, výroba, CLOB trh, retail, anti-inflace, datový model, stack, MVP | ✅ návrh |
-| 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 8 rozhodnutí čekajících na potvrzení | 🔶 otevřeno |
-| 10 | `docs/10-ekonomika-core-loop.md` | balance spreadsheet, konkrétní čísla, faucets/sinks v $ | ⬜ |
+| 00 | [Vize a koncept](docs/00-vize-a-koncept.md) | pilíře, core loop, ekonomické toky, výroba, CLOB trh, retail, anti-inflace, datový model, stack, MVP | ✅ návrh<br>⚠️ 3 sekce překonány |
+| 10 | [Ekonomika a core loop](docs/10-ekonomika-core-loop.md) | uzamčená rozhodnutí, real-time tick model, odvození cen, pozemky, retail fill-rate, inflace, sezóny | ✅ hotovo |
+| — | [Balance v0.2](docs/generated/balance-v0.2.md) | *generováno* — ceník 25 položek, 25 budov, úrovně, režie, pozemky, makro projekce, ladící knoflíky | 🤖 auto |
+| 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 4 uzamčena, 3 nová z modelových zjištění, 4 otevřená | 🔶 částečně |
 | 20 | `docs/20-datovy-model.md` | kompletní DDL, indexy, constrainty, migrace | ⬜ |
 | 30 | `docs/30-matching-engine.md` | CLOB specifikace, pseudokód, race conditions, testy | ⬜ |
 | 40 | `docs/40-tick-engine.md` | výroba, retail simulace, údržba, lazy evaluation | ⬜ |
@@ -25,12 +26,28 @@ Inspirace: **Capital Rift** (hráči řízený order book, live P&L, logistika) 
 
 ## Plánovaný stack
 
-TypeScript end-to-end · modulární monolit · **PostgreSQL** (zdroj pravdy, podvojný ledger)
-· **Node.js + Fastify + Drizzle** · **Redis + BullMQ** (tick engine, queue, pub/sub)
-· **React 19 + Vite + TanStack Query/Table + shadcn/ui + ECharts** · **SSE** pro realtime
-market data (WS-ready event schéma).
+TypeScript end-to-end · modulární monolit · **PostgreSQL 17** (zdroj pravdy, podvojný ledger)
+· **Node.js 22 + Fastify + Drizzle** · **Redis 7 + BullMQ** (tick engine, queue, pub/sub)
+· **React 19 + Vite + TanStack Query/Table + shadcn/ui + ECharts** · **WebSocket** pro realtime
+market data (SSE jako fallback) — změna vůči doc 00 §5, viz ADR-002 a doc 10 §7.
 
-Detail a zdůvodnění: [`docs/00-vize-a-koncept.md` §5](docs/00-vize-a-koncept.md).
+Detail a zdůvodnění: [`docs/00-vize-a-koncept.md` §5](docs/00-vize-a-koncept.md) a
+[`docs/10-ekonomika-core-loop.md` §7](docs/10-ekonomika-core-loop.md).
+
+## Nástroje
+
+| Cesta | Účel |
+|---|---|
+| `tools/balance/generate_v0.py` | Odvodí ceny všech položek zdola nahoru (cost-plus) a vygeneruje balance tabulky + seed JSON. Retuning = změna `m`/`payback`/`q_out` a rerun. |
+| `tools/balance/tune.py` | Parametrický sweep makro knoflíků (972 kombinací) proti cílovému CPI driftu. |
+| `seed/balance-v0.2.json` | Výstup generátoru — seed dat pro DB (položky, budovy, recepty, úrovně, pozemky). |
+
+```bash
+python3 tools/balance/generate_v0.py              # přegenerovat balance
+python3 tools/balance/tune.py --top 12            # sweep makro knoflíků
+RETAIL_FILL_TARGET=0.7 HQ_P=1.6 python3 tools/balance/generate_v0.py   # override přes env
+```
+
 
 ## Klíčová designová pravidla
 
@@ -40,4 +57,10 @@ Detail a zdůvodnění: [`docs/00-vize-a-koncept.md` §5](docs/00-vize-a-koncept
 3. **Sklad je ventil.** Výroba běží offline, dokud se nenaplní výstupní sklad — žádné umělé timery.
 4. **První zisk do 5 minut.** Pacing křivka je explicitní designový artefakt, ne náhoda.
 5. **Sinky škálují superlineárně s bohatstvím**, jinak ekonomiku ovládne oligarchie.
-6. **F2P, nikdy pay-to-win.** Reálné peníze neinjectují herní měnu.
+   Páteř musí být **nominální** sinky (nájem, režie, daně, mzdy indexované na CPI) —
+   sinky vázané na zisk vypadnou přesně ve chvíli, kdy by měly tlumit (ADR-010).
+6. **Cíl je CPI drift, ne růst peněžní zásoby.** `CPI = %ΔM2 − %ΔY`. Rostoucí ekonomika
+   *musí* zvyšovat M2, jen aby cenová hladina stála (ADR-009).
+7. **Vstupy se kupují na burze, ne za tabulkové ceny.** Jen tak při poklesu cenové hladiny
+   klesnou náklady spolu s tržbami a marže přežijí (ADR-011).
+8. **F2P, nikdy pay-to-win.** Reálné peníze neinjectují herní měnu.

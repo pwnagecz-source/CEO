@@ -8,6 +8,25 @@
 
 ---
 
+> ### ⚡ Aktualizace 2026-09-12 — rozhodnutí uzamčena, tři části tohoto dokumentu jsou překonány
+>
+> ADR-001 až 004 byly rozhodnuty (mřížka pozemků · real-time tempo · sezónní světy ·
+> TypeScript). Následně vznikl [`docs/10-ekonomika-core-loop.md`](10-ekonomika-core-loop.md)
+> a generovaný balance model [`docs/generated/balance-v0.2.md`](generated/balance-v0.2.md),
+> které **překonávají** tyto části:
+>
+> | Sekce | Původní tvrzení | Nahrazeno |
+> |---|---|---|
+> | §3.2 | cíl `ΔM/M2 ≈ +2 až +4 %/měsíc` | **CPI drift = %ΔM2 − %ΔY**, cíl 1–4 %/měs — ADR-009 |
+> | §3.4 | pacing pro hybridní tempo | **real-time pacing** — doc 10 §2.1 |
+> | §5 | SSE jako primární transport | **WebSocket** primární, SSE fallback — doc 10 §7 |
+>
+> Modelové sweep navíc ukázal, že **sezónní reset (ADR-003) je nosný anti-inflační
+> mechanismus, ne volitelná kosmetika** — systém je bistabilní a uvnitř jedné rostoucí
+> sezóny nelze držet CPI v pásmu laděním sinků. Detail: doc 10 §6.
+
+---
+
 ## 1. Vize
 
 **CEO** je textově/UI orientovaný prohlížečový MMO ekonomický simulátor. Hráč zakládá firmu,
@@ -115,8 +134,8 @@ M2  = Σ hotovost firem + Σ escrow na burze + Σ bankovní účty
 CPI = vážený koš 8–12 finálních spotřebitelských zboží (váhy fixní od spuštění)
 
 Cílové hodnoty:
-  ΔM/M2      ≈ +2 až +4 % měsíčně        (řízená, mírná inflace)
-  CPI drift  ≈ +1 až +3 % měsíčně
+  ΔM/M2      ≈ +2 až +4 % měsíčně        ⚠️ PŘEKONÁNO — viz ADR-009
+  CPI drift  ≈ +1 až +3 % měsíčně        ✅ tohle je správný cíl (ADR-009)
   rychlost oběhu (objem obchodů / M2) ≈ 0,3–0,8 / den
   Gini coefficient bohatství < 0,75      (nad tím = ekonomika umírá na oligarchii)
   podíl top-1 % na M2 < 35 %
@@ -189,6 +208,11 @@ Tohle jediné pravidlo řeší čtyři problémy najednou a nepotřebuje žádn�
 4. **Ochrana trhu** — nikdo nemůže nekonečně hromadit a pak dumpovat.
 
 ### 3.4 Pacing křivka (retenční záchrana)
+
+> ⚠️ **PŘEKONÁNO ADR-002 (real-time tempo).** Aktuální pacing křivka:
+> [`docs/10-ekonomika-core-loop.md` §2.1](10-ekonomika-core-loop.md). První cyklus 90 s,
+> plnění skladu ~1,5 h u všech budov, max 4–8 h v pozdní hře. Princip níže (nikdy 24 h
+> v prvním týdnu) platí dál.
 
 Explicitní cíl, ne náhoda. Recenze Sim Companies to pojmenovávají přesně: *„5 star gameplay,
 1 star player retention — requiring you to wait upwards of 24 hours for production in your
@@ -464,6 +488,15 @@ ENGAGEMENT
 | **Hosting** | **Hetzner Cloud + Docker Compose + Caddy** | ~15 €/měs za vše. Alternativa: Fly.io / Railway pro nulovou ops zátěž |
 
 ### WebSockets vs SSE — skutečná odpověď
+
+> ⚠️ **DOPORUČENÍ OBRÁCENO ADR-002 (real-time tempo).** Aktuální rozhodnutí:
+> **WebSocket primární, SSE fallback** — viz [`docs/10-ekonomika-core-loop.md` §7](10-ekonomika-core-loop.md).
+> Rozhodující změna vstupu: real-time tempo znamená ~1 000–3 000 concurrent v peaku
+> (ne 50–200), vysoký subscription churn a latenci zápisu jako *gameplay* vlastnost.
+> Hlavní námitka proti WS (sticky sessions, stateful LB) stejně odpadá, protože stateful
+> Node proces s tick enginem je potřeba tak jako tak.
+> Níže uvedený rozbor platí pro async tempo; tři podmínky pro bezbolestný přechod
+> (delta protokol, coalescing, explicitní subscriptions) platí **pro oba transporty**.
 
 **Doporučení: začni se SSE. Ale navrhni event schéma jako WS-ready.**
 

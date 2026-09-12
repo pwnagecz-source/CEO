@@ -6,7 +6,11 @@ Jakmile se rozhodne, přesune se do `docs/adr/NNN-*.md` s datem a zdůvodněním
 ---
 
 ## ADR-001 — Prostorovost: mapa a pozemky vs. abstraktní ekonomika
-**Stav:** OTEVŘENO
+**Stav:** ✅ ROZHODNUTO 2026-09-12 → **B) Omezená mřížka pozemků**
+**Rozhodnutí:** 288 pozemků na svět (mřížka 24×12), 7 typů, depositní pozemky gates těžbu.
+**Důsledek:** nová ekonomická vrstva — dražby, nájem, daň z nemovitosti, adjacency, sekundární
+trh s půdou. Doprava v MVP = paušál podle manhattan vzdálenosti (žádné pathfinding).
+**Detail:** `docs/10-ekonomika-core-loop.md` §4.
 **Otázka:** Má hra mít geografii (pozemky, vzdálenosti, doprava, lokace budov), nebo je
 prostor čistě abstraktní (firma = seznam budov)?
 
@@ -23,7 +27,14 @@ vzácnost a sink za ~10 % práce varianty C. Varianta A je bezpečná záloha.
 ---
 
 ## ADR-002 — Tempo hry a očekávaná doba online
-**Stav:** OTEVŘENO
+**Stav:** ✅ ROZHODNUTO 2026-09-12 → **A) Real-time / aktivní sezení**
+**Rozhodnutí:** hráč hraje 1–2 h v kuse; první výrobní cyklus 90 s; burza je živá.
+**Důsledky (dva, oba mění architekturu):**
+1. **Globální 1s tick NE.** Server settle 1 min, klient interpoluje progress bary lokálně
+   na 60 fps. „Real-time" je vlastnost UX, ne simulace — viz doc 10 §2.
+2. **Obrací doporučení transportu SSE → WebSocket** (ADR-004 vstup se změnil: vyšší
+   concurrent, subscription churn, latence zápisu je gameplay). Viz doc 10 §7.
+**Detail:** `docs/10-ekonomika-core-loop.md` §2, §7.
 **Otázka:** Jak často má hráč *potřebovat* být online?
 
 | Varianta | Délka prvního cyklu | Typ hráče | Důsledek |
@@ -39,7 +50,14 @@ max ~12 h v pozdní hře. Offline limit řeší sklad, ne timer.
 ---
 
 ## ADR-003 — Trvalý svět vs. sezónní resety
-**Stav:** OTEVŘENO
+**Stav:** ✅ ROZHODNUTO 2026-09-12 → **B) Sezónní světy + prestige carry-over**
+**Rozhodnutí:** sezóna 120 dní; přecházejí Legacy Points, jméno, kosmetika a archiv.
+Nepřechází hotovost, budovy, inventář, objednávky.
+**Důsledek:** `world_id` na `companies`, `market_orders`, `trades`, `plots` od první migrace.
+**⚠️ Potvrzeno modelovým důkazem, ne jen intuicí:** sweep 972 konfigurací ukázal, že
+uvnitř jedné rostoucí sezóny NELZE držet CPI v pásmu 1–4 %/měs laděním sinků — systém je
+bistabilní (hyperinflace, nebo kolaps). Sezónní reset je tedy **nosný anti-inflační
+mechanismus**, ne kosmetika. Viz `docs/10-ekonomika-core-loop.md` §6.
 **Otázka:** Jeden permanentní svět, nebo sezóny s resetem?
 
 | Varianta | Anti-inflace | Noví hráči | Retence | Riziko |
@@ -56,7 +74,12 @@ admin tooling pro spuštění světa.
 ---
 
 ## ADR-004 — Zkušenost s technologiemi / preferovaný stack
-**Stav:** OTEVŘENO
+**Stav:** ✅ ROZHODNUTO 2026-09-12 → **A) TypeScript monolit**
+**Rozhodnutí:** Node 22 + Fastify + Drizzle + React 19 + Vite + PostgreSQL 17 + Redis 7
++ BullMQ, pnpm workspaces + Turborepo, Zod pro sdílená schémata, ECharts pro grafy.
+**Změna vůči doc 00 §5:** real-time transport **WebSocket** (primární) + SSE (fallback),
+ne SSE-only. Důvod v doc 10 §7.
+**Detail:** `docs/00-vize-a-koncept.md` §5, `docs/10-ekonomika-core-loop.md` §7.
 **Otázka:** Jaký je tvůj silný stack? Sólový vývojář by měl stavět v tom, co zná —
 rychlost vývoje je u hry tohoto typu kritičtější než benchmarky.
 
@@ -118,3 +141,42 @@ ale nenahradí.
 **Důvod:** kvalita segmentuje order book a brání závodu ke dnu (§3.3). Zpětné přidání do
 `inventory` + `market_orders` + `trades` je migrace přes miliony řádků.
 **Dopad:** primary klíče a unique indexy obsahují `quality_tier` od začátku.
+
+---
+
+## ADR-009 — Cílová makro metrika: CPI drift, ne ΔM/M2
+**Stav:** ✅ ROZHODNUTO 2026-09-12 (na základě modelového zjištění)
+**Rozhodnutí:** Cílová metrika je **CPI drift = %ΔM2 − %ΔY** v pásmu **1–4 %/měsíc**,
+ne růst peněžní zásoby `ΔM/M2`.
+**Důvod:** z kvantitativní rovnice `M·V = P·Y` plyne, že rostoucí ekonomika musí zvyšovat
+M2 jen aby udržela cenovou hladinu. Původní cíl `ΔM/M2 = 2–4 %` (v doc 00 §3.2) by trestal
+zdravý růst. **Doc 00 §3.2 je tímto překonán.**
+**Dopad:** `daily_snapshots` musí ukládat i Laspeyres index reálného výstupu Y.
+
+---
+
+## ADR-010 — Páteř anti-inflace musí být nominální sinky
+**Stav:** ✅ ROZHODNUTO 2026-09-12 (na základě modelového zjištění)
+**Rozhodnutí:** Anti-inflační zátěž nesou **nominální, na zisku nezávislé sinky** — nájem,
+korporátní režie, daň z nemovitosti, daň z bohatství a **mzdy indexované na CPI**.
+Capex a výzkum jsou doplněk, ne páteř.
+**Důvod:** sinky vázané na zisk (`capex = max(0, profit) × disposal`) se samy vyradí přesně
+ve chvíli, kdy by měly tlumit — když komprese marží srazí zisk k nule.
+**Dopad:** korporátní režie = 60 % fixní složka + 40 % z hrubé marže (čistě fixní způsobuje
+bankrotovou kaskádu, čistě plovoucí netvoří tlak).
+
+---
+
+## ADR-011 — Statický model neumí najít rovnováhu; nutný agent-based simulátor
+**Stav:** ✅ ROZHODNUTO 2026-09-12
+**Rozhodnutí:** `tools/balance/generate_v0.py` slouží k **odvození konzistentních cen**
+(cost-plus zdola nahoru) a k řádovému makro odhadu. **Nehledá rovnováhu a nemůže.**
+Rovnováhu musí ověřit agent-based simulátor s endogenní tvorbou cen (`docs/70-*`).
+**Důvod:** model používá `fill_rate` jako proxy za cenovou adjustaci, ale `fill_rate`
+snižuje tržby, aniž by snižoval náklady. V reálném order booku klesá *cena* a s ní
+nominální tržby **i nominální náklady na vstupy** současně → marže v poměrovém vyjádření
+přežijí. To statický model nezachytí.
+**Důsledek pro návrh:** je to argument **PRO** hluboký CLOB a **PROTI** NPC výkupu za fixní
+cenu v pozdní hře. NPC market maker se musí vypínat, jakmile to hráčská likvidita dovolí.
+**Priorita:** `docs/70-ekonomicky-simulator.md` jde NAHORU — z P2 na **P1**, protože bez
+něj nelze ekonomiku validovat před spuštěním.
