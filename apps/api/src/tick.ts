@@ -98,8 +98,13 @@ async function addItems(d: Db, invId: number, itemId: number, qty: number) {
 }
 
 async function takeItems(d: Db, rowId: number, qty: number) {
+  // LEAST je poslední pojistka proti záporným zásobám (CHECK qty_nonneg by
+  // shodil celý tick a svět by zamrzl). Nikdy neubírá víc, než kolik je
+  // volné (quantity − reserved) — do rezervací příkazů nesahá.
   await d.query(
-    `UPDATE inventory_items SET quantity = quantity - $2, updated_at = now()
+    `UPDATE inventory_items
+        SET quantity = quantity - LEAST($2::float8, quantity - reserved_qty),
+            updated_at = now()
       WHERE id = $1`,
     [rowId, round6(qty)],
   )
@@ -315,6 +320,20 @@ export async function runTick(d: Db, worldId: number) {
       if (row && sellQty > 0) {
         const gross = round6(sellQty * b.retail_base * eff.retail)
         await takeItems(d, Number(row.id), sellQty)
+        // ★ Retailní odběr se musí propsat i do vstupní cache firmy: pozdější
+        // budova ve stejném ticku může právě tuhle položku spotřebovat jako
+        // vstup (pekárna prodá chleba, deli ho potřebuje). Bez synchronizace
+        // by cache lhala a odečet by šel do záporu (CHECK qty_nonneg → celý
+        // tick by se rollbackoval a svět by zamrzl).
+        const cached = stockCache.get(b.company_id)
+        if (cached) {
+          for (const cr of cached) {
+            if (cr.id === Number(row.id)) {
+              cr.avail = Math.max(0, cr.avail - sellQty)
+              break
+            }
+          }
+        }
         await post(d, worldId, [
           { party: { type: 'system' }, kind: 'faucet_retail', amount: -gross,
             moneyFlow: 'faucet', refType: 'building', refId: b.id },
