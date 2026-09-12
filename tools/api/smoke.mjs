@@ -311,6 +311,107 @@ console.log(`\n[16] delta protokol (SSE) — jen změněné pozemky místo celé
 }
 check('audit PASS po SSE sekci', (await j('/audit')).verdict, 'PASS')
 
+// ── Fáze F: živý svět (progrese, zakázky, finance, budovy) ──────────────────
+console.log(`\n[17] Fáze F — progrese, zakázky, půjčky, manažeři, upgrade/demolice`)
+{
+  // Pauza hodin: žádný tick nám nesmí sáhnout do cash mezi asserty.
+  await post('/clock', { speed: 0 })
+
+  // claim: vybrat firmu = hrát za ni (NPC mozek ji vynechává)
+  const cl = await post('/companies/2/claim', {})
+  check('claim firmy 2 → 200', cl.status, 200)
+  const co2d = await j('/companies/2')
+  check('claimed firma není NPC', co2d.isNpc, false)
+  check('firma má level', co2d.level, 1)
+  const cosF = await j('/companies')
+  check('firma 1 je po claimu dvojky NPC', cosF.companies.find((c) => c.id === '1').is_player, false)
+
+  // progrese + výzkumný strom
+  const pg = await j('/companies/2/progression')
+  check('strom má 10 výzkumů', pg.research.length, 10)
+  check('T1 dostupné hned', pg.research.filter((r) => r.tier === 1 && r.state === 'available').length, 4)
+  check('T3 zamčené úrovní', pg.research.filter((r) => r.tier === 3 && r.state === 'locked').length, 2)
+
+  // výzkum: platba, běh, zamčení
+  const cashB4res = (await j('/companies/2')).cash
+  const rs = await post('/companies/2/research', { code: 'eff_timber' })
+  check('start výzkumu → 200', rs.status, 200)
+  check('výzkum stojí 400 Kč', rs.body.cost, 400)
+  check('cash klesla přesně o 400', Math.abs(cashB4res - (await j('/companies/2')).cash - 400) < 0.01, true)
+  check('běžící výzkum nelze spustit znovu → 422',
+    (await post('/companies/2/research', { code: 'eff_timber' })).status, 422)
+  check('zamčený výzkum (T3) → 422',
+    (await post('/companies/2/research', { code: 'automation' })).status, 422)
+  check('výzkum je ve stavu running',
+    (await j('/companies/2/progression')).research.find((r) => r.code === 'eff_timber').state, 'running')
+
+  // zakázky: generování ze seedu, přijetí, double-take, deliver bez zboží
+  const ct = await j('/contracts?companyId=2')
+  check('svět drží ≥4 otevřené zakázky', ct.contracts.filter((c) => c.status === 'open').length >= 4, true)
+  const inv2 = new Set(((await j('/companies/2')).inventory).map((i) => i.item))
+  const c0 = ct.contracts.find((c) => c.status === 'open' && !inv2.has(c.item))
+  if (c0) {
+    const tk = await post(`/contracts/${c0.id}/take`, { companyId: 2 })
+    check('přijetí zakázky → taken', tk.body.status, 'taken')
+    check('obsazenou zakázku nelze vzít znovu → 422',
+      (await post(`/contracts/${c0.id}/take`, { companyId: 2 })).status, 422)
+    const dl = await post(`/contracts/${c0.id}/deliver`, { companyId: 2 })
+    check('splnění bez zboží → insufficient_goods', dl.body.code, 'insufficient_goods')
+    check('vlastní zakázka má isMine',
+      (await j('/contracts?companyId=2')).contracts.find((c) => c.id === c0.id).isMine, true)
+  } else {
+    console.log('  ⚠️  žádná zakázka mimo sklad — deliver test přeskočen')
+  }
+
+  // půjčky: strop podle úrovně, splácení
+  const ln = await post('/companies/2/loans', { principal: 1000 })
+  check('půjčka 1000 → 200', ln.status, 200)
+  const li = await j('/companies/2/loans')
+  check('dluh 1000', li.outstanding, 1000)
+  check('kapacita L1: 5000 − 1000 = 4000', li.capacity, 4000)
+  check('půjčka nad strop → loan_limit',
+    (await post('/companies/2/loans', { principal: 5000 })).body.code, 'loan_limit')
+  check('splatit půjčku → 200', (await post(`/loans/${ln.body.id}/repay`, { companyId: 2 })).status, 200)
+  check('po splacení dluh 0', (await j('/companies/2/loans')).outstanding, 0)
+
+  // manažeři: nájem, duplicita, propuštění
+  check('najmout ředitele výroby → 200',
+    (await post('/companies/2/executives', { role: 'production' })).status, 200)
+  check('dvakrát stejná role → 422',
+    (await post('/companies/2/executives', { role: 'production' })).status, 422)
+  check('výroba je obsazená',
+    (await j('/companies/2/executives')).executives.find((e) => e.role === 'production').hired, true)
+  check('propustit manažera → 200', (await del('/companies/2/executives/production')).status, 200)
+
+  // P&L z journalu
+  const pnl = await j('/companies/2/pnl')
+  check('P&L vidí výzkum −400', pnl.items.find((i) => i.kind === 'research')?.total, -400)
+  check('P&L net = revenue + costs', Math.abs(pnl.net - (pnl.revenue + pnl.costs)) < 0.01, true)
+
+  // historie cen (po pauze možná prázdná, ale endpoint musí vracet pole)
+  check('historie cen je pole', Array.isArray((await j('/market/log/history?hours=24')).history), true)
+
+  // upgrade brána + demolice s odkupem
+  const catF = (await j('/buildings/catalog')).buildings
+  const bF = co2d.buildings.find((b) => (catF.find((c) => c.code === b.code)?.max_level ?? 5) >= 2)
+    ?? co2d.buildings[0]
+  const up = await post(`/buildings/${bF.id}/upgrade`, { companyId: 2 })
+  check('upgrade L2 s firmou L1 → level_required', up.body.code, 'level_required')
+  const dm = await post(`/buildings/${bF.id}/demolish`, { companyId: 2 })
+  check('demolice → 200', dm.status, 200)
+  check('odkup za demolici > 0', dm.body.refund > 0, true)
+  check('budova po demolici zmizela',
+    (await j('/companies/2')).buildings.find((b) => b.id === bF.id), undefined)
+
+  await post('/clock', { speed: 1 })
+}
+check('audit PASS po Fázi F', (await j('/audit')).verdict, 'PASS')
+{
+  const mf = await j('/macro')
+  check('M2 identita drží po Fázi F',
+    Math.abs(mf.m2 - (mf.moneyCreated - mf.moneyDestroyed)) < 0.01, true)
+}
+
 console.log('\n────────────────────────────────────────────────────────────')
 console.log(` ${pass} ✅   ${fail} ❌   →  ${fail === 0 ? 'VŠECHNO PROŠLO' : 'MÁME PROBLÉM'}`)
 console.log('────────────────────────────────────────────────────────────\n')

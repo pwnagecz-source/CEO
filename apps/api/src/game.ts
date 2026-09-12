@@ -12,6 +12,7 @@
  */
 import { MarketError, placeOrder, type PlaceOrderResult } from './market.ts'
 import { post, round6 } from './ledger.ts'
+import { levelForXp } from './progression.ts'
 import type { Db } from './db.ts'
 import { one, many } from './db.ts'
 
@@ -241,4 +242,119 @@ export async function quickSell(
     worldId, companyId, itemCode, qualityTier: 1,
     side: 'sell', qty, orderType: 'market',
   })
+}
+
+// ---------------------------------------------------------------------------
+//  Fáze F — upgrade a demolice budov
+// ---------------------------------------------------------------------------
+
+/** Cena upgradu na další úroveň: 60 % základního capexu × současná úroveň. */
+export function upgradeCost(baseCapex: number, level: number): number {
+  return round6(baseCapex * 0.6 * level)
+}
+
+/**
+ * Zvýší úroveň budovy: platba → sink_capex (journal 'upgrade_capex'), budova
+ * jde do 'construction' na 60 % původní doby výstavby × současná úroveň.
+ * Brána: úroveň FIRMY musí být ≥ nová úroveň budovy (progrese z progression.ts).
+ */
+export async function upgradeBuilding(
+  d: Db, worldId: number, companyId: number, buildingId: number,
+): Promise<{ buildingId: number; level: number; cost: number }> {
+  const b = await one<{
+    id: string; level: number; status: string; capex: number; build_secs: number
+    max_level: number; name: string; xp: number
+  }>(
+    d,
+    `SELECT b.id::text, b.level::int, b.status::text, bt.base_capex::float8 AS capex,
+            bt.base_build_seconds::int AS build_secs, bt.max_level::int AS max_level,
+            bt.name, c.xp::float8 AS xp
+       FROM buildings b
+       JOIN building_types bt ON bt.id = b.type_id
+       JOIN companies c ON c.id = b.company_id
+      WHERE b.id=$1 AND b.world_id=$2 AND b.company_id=$3`,
+    [buildingId, worldId, companyId],
+  )
+  if (!b) throw new MarketError('budova nenalezena (nebo není tvoje)', 'not_found')
+  if (b.status === 'construction') {
+    throw new MarketError('budova se právě staví/přestavuje', 'busy')
+  }
+  if (b.level >= b.max_level) {
+    throw new MarketError(`${b.name} je na maximální úrovni ${b.max_level}`, 'max_level')
+  }
+  const newLevel = b.level + 1
+  if (levelForXp(b.xp) < newLevel) {
+    throw new MarketError(
+      `na úroveň ${newLevel} potřebuje firma úroveň ${newLevel} (sbírej XP výrobou a zakázkami)`,
+      'level_required')
+  }
+
+  const cost = upgradeCost(b.capex, b.level)
+  const cash = await one<{ c: number }>(
+    d,
+    `SELECT COALESCE(SUM(balance),0)::float8 AS c FROM accounts
+      WHERE owner_type='company' AND owner_id=$1 AND kind='cash'`,
+    [companyId],
+  )
+  if ((cash?.c ?? 0) < cost) {
+    throw new MarketError(
+      `upgrade stojí ${cost} Kč, na účtu máš ${round6(cash?.c ?? 0)} Kč`,
+      'insufficient_funds')
+  }
+
+  await post(d, worldId, [
+    { party: { type: 'company', id: companyId }, kind: 'cash', amount: -cost,
+      moneyFlow: 'sink', refType: 'building', refId: buildingId },
+    { party: { type: 'system' }, kind: 'sink_capex', amount: cost,
+      moneyFlow: 'sink', refType: 'building', refId: buildingId },
+  ], { kind: 'upgrade_capex' })
+
+  await d.query(
+    `UPDATE buildings
+        SET level = level + 1, status = 'construction',
+            completed_at = now() + make_interval(secs => ($2::float8 * $3::float8 * 0.6)::int)
+      WHERE id=$1`,
+    [buildingId, b.build_secs, b.level],
+  )
+  return { buildingId, level: newLevel, cost }
+}
+
+/**
+ * Zboří budovu: stát odkoupí 25 % capexu × úroveň (faucet_state → cash,
+ * journal 'demolition'). Dopravní trasy dotýkající se pozemku se smažou —
+ * pozemek samotný hráči zůstává.
+ */
+export async function demolishBuilding(
+  d: Db, worldId: number, companyId: number, buildingId: number,
+): Promise<{ buildingId: number; refund: number; plotId: number }> {
+  const b = await one<{ id: string; plot_id: number; level: number; capex: number; status: string }>(
+    d,
+    `SELECT b.id::text, b.plot_id::int, b.level::int, b.status::text,
+            bt.base_capex::float8 AS capex
+       FROM buildings b JOIN building_types bt ON bt.id = b.type_id
+      WHERE b.id=$1 AND b.world_id=$2 AND b.company_id=$3`,
+    [buildingId, worldId, companyId],
+  )
+  if (!b) throw new MarketError('budova nenalezena (nebo není tvoje)', 'not_found')
+  if (b.status === 'construction') {
+    throw new MarketError('rozestavěnou budovu nelze zbourat', 'busy')
+  }
+
+  const refund = round6(b.capex * 0.25 * b.level)
+  if (refund > 0) {
+    await post(d, worldId, [
+      { party: { type: 'system' }, kind: 'faucet_state', amount: -refund,
+        moneyFlow: 'faucet', refType: 'building', refId: buildingId },
+      { party: { type: 'company', id: companyId }, kind: 'cash', amount: refund,
+        moneyFlow: 'faucet', refType: 'building', refId: buildingId },
+    ], { kind: 'demolition' })
+  }
+
+  await d.query(
+    `DELETE FROM transport_routes
+      WHERE world_id=$1 AND company_id=$2 AND (from_plot_id=$3 OR to_plot_id=$3)`,
+    [worldId, companyId, b.plot_id],
+  )
+  await d.query(`DELETE FROM buildings WHERE id=$1`, [buildingId])
+  return { buildingId, refund, plotId: b.plot_id }
 }

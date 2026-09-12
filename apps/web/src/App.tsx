@@ -3,11 +3,14 @@ import {
   ApiError, api,
   type Audit, type Book, type CatalogRow, type Clock, type CodexInput, type CodexRecipe,
   type Company, type CompanySummary, type Item, type Macro, type MapData, type MapPlot,
-  type OpenOrder, type PlaceOrderResult, type QuestState, type RoadQuote,
+  type HistoryPoint, type OpenOrder, type PlaceOrderResult, type QuestState, type RoadQuote,
   type RouteMode, type RouteQuoteResult, type Trade, type TransportRoute,
 } from './api'
 import CodexView from './components/CodexView'
+import ContractsView from './components/ContractsView'
+import FinanceView from './components/FinanceView'
 import GameView from './components/GameView'
+import ResearchView from './components/ResearchView'
 import SetupScreen from './components/SetupScreen'
 import TerminalView from './components/TerminalView'
 
@@ -56,6 +59,8 @@ export default function App() {
   // Výchozí pohled je HRA. Terminál (expertní) je na jedno kliknutí, ale není to
   // první věc, kterou nový hráč uvidí.
   const [mode, setMode] = useState<'game' | 'terminal' | 'codex'>('game')
+  const [modal, setModal] = useState<null | 'research' | 'contracts' | 'finance'>(null)
+  const [history, setHistory] = useState<HistoryPoint[]>([])
   const [book, setBook] = useState<Book | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [lastSync, setLastSync] = useState<Date | null>(null)
@@ -184,6 +189,9 @@ export default function App() {
 
   async function selectCompany(id: string) {
     setCompanyId(id)
+    // Singleplayer bez auth: vybrat firmu = hrát za ni. Claim řekne serveru,
+    // aby ji NPC mozek vynechával (jinak by soupeř hrál za tebe).
+    void api.claimCompany(id).catch(() => { /* nevadí — svět běží dál */ })
     try {
       const [co, oo] = await Promise.all([api.company(id), api.orders(id)])
       setCompany(co)
@@ -192,6 +200,15 @@ export default function App() {
       setError(e instanceof Error ? e.message : String(e))
     }
   }
+
+  // Historie ceny pro sparkline v Terminálu (mění se s výběrem položky).
+  useEffect(() => {
+    let alive = true
+    void api.priceHistory(itemCode, 96)
+      .then((r) => { if (alive) setHistory(r.history) })
+      .catch(() => { if (alive) setHistory([]) })
+    return () => { alive = false }
+  }, [itemCode, mode])
 
   /** Společný obal akcí ve hře: stavový text, chyba, refresh světa. */
   async function gameAction(label: string, fn: () => Promise<void>) {
@@ -219,6 +236,17 @@ export default function App() {
   const quickSell = (itemCode: string) => void gameAction('Prodávám…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
     await api.quickSell(companyId, itemCode)
+  })
+
+  const upgrade = (buildingId: string) => void gameAction('Přestavuji…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.upgradeBuilding(buildingId, companyId)
+  })
+
+  const demolish = (buildingId: string) => void gameAction('Bourám…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.demolishBuilding(buildingId, companyId)
+    setSelectedPlot(null)
   })
 
   const hireRoad = (p: MapPlot) => void gameAction('Stavební firma pokládá silnici…', async () => {
@@ -360,6 +388,7 @@ export default function App() {
   // ── HERNÍ POHLED (výchozí) ───────────────────────────────────────────────
   if (mode === 'game') {
     return (
+      <>
       <GameView
         map={map}
         catalog={catalog}
@@ -375,6 +404,11 @@ export default function App() {
         onBuild={buildAt}
         onNewCompany={() => setSetup(true)}
         onOpenTerminal={() => setMode('terminal')}
+        onOpenResearch={() => setModal('research')}
+        onOpenContracts={() => setModal('contracts')}
+        onOpenFinance={() => setModal('finance')}
+        onUpgrade={upgrade}
+        onDemolish={demolish}
         onQuickSell={quickSell}
         onHireRoad={hireRoad}
         onOpenCodex={() => setMode('codex')}
@@ -392,6 +426,19 @@ export default function App() {
         busy={actBusy}
         err={actErr}
       />
+      {modal === 'research' && companyId && (
+        <ResearchView companyId={companyId} onClose={() => setModal(null)}
+          onChanged={() => { void refresh(); void refreshMap() }} />
+      )}
+      {modal === 'contracts' && companyId && (
+        <ContractsView companyId={companyId} onClose={() => setModal(null)}
+          onChanged={() => { void refresh(); void refreshMap() }} />
+      )}
+      {modal === 'finance' && companyId && (
+        <FinanceView companyId={companyId} onClose={() => setModal(null)}
+          onChanged={() => { void refresh(); void refreshMap() }} />
+      )}
+      </>
     )
   }
 
@@ -425,6 +472,7 @@ export default function App() {
       orders={orders}
       trades={trades}
       busy={busy}
+      history={history}
       onPlace={place}
       onCancel={(id) => void cancel(id)}
       onRefresh={() => void refresh()}

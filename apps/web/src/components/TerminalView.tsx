@@ -1,12 +1,46 @@
 import { useMemo, useState } from 'react'
 import type {
-  Audit, Book, Company, CompanySummary, Item, Macro, OpenOrder, PlaceOrderResult, Trade,
+  Audit, Book, Company, CompanySummary, HistoryPoint, Item, Macro, OpenOrder,
+  PlaceOrderResult, Trade,
 } from '../api'
 import { ago, money, price, qty } from '../fmt'
 import BookPanel from './BookPanel'
 import Footer from './Footer'
 import Header from './Header'
+import TerminalTutorial, { TUT_STEPS } from './TerminalTutorial'
 import TradeTape from './TradeTape'
+
+const TUT_KEY = 'ceo.tut.term.v1'
+
+/** Mini graf vývoje ceny (mid po herních hodinách) — data z /api/market/:code/history. */
+function PriceSpark({ history }: { history: HistoryPoint[] }) {
+  const pts = history
+    .map((h) => h.mid ?? h.last)
+    .filter((v): v is number => v !== null)
+  if (pts.length < 2) return null
+  const min = Math.min(...pts)
+  const max = Math.max(...pts)
+  const span = max - min || 1
+  const W = 240
+  const H = 40
+  const xy = pts.map((v, i) =>
+    `${((i / (pts.length - 1)) * W).toFixed(1)},${(H - 4 - ((v - min) / span) * (H - 8)).toFixed(1)}`)
+  const up = pts[pts.length - 1]! >= pts[0]!
+  return (
+    <div className="spark">
+      <div className="spark__head">
+        <span className="dim">historie ceny · {pts.length} herních hodin</span>
+        <span className={up ? 'pos' : 'neg'}>
+          {up ? '▲' : '▼'} {price(pts[pts.length - 1])}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="spark__svg">
+        <polyline points={xy.join(' ')} fill="none"
+          stroke={up ? '#3fb950' : '#f85149'} strokeWidth="1.6" />
+      </svg>
+    </div>
+  )
+}
 
 type Props = {
   macro: Macro | null
@@ -24,6 +58,7 @@ type Props = {
   orders: OpenOrder[]
   trades: Trade[]
   busy: boolean
+  history: HistoryPoint[]
   onPlace: (p: {
     side: 'buy' | 'sell'; qty: number; priceLimit: number | null
     orderType: 'limit' | 'market'
@@ -52,10 +87,21 @@ const CAT_ORDER = ['raw', 'intermediate', 'component', 'final', 'utility']
  */
 export default function TerminalView({
   macro, audit, health, items, itemCode, onSelectItem, book, fees, companies, companyId,
-  onSelectCompany, company, orders, trades, busy, onPlace, onCancel, onRefresh, onReset,
-  onOpenGame, lastSync, error,
+  onSelectCompany, company, orders, trades, busy, history, onPlace, onCancel, onRefresh,
+  onReset, onOpenGame, lastSync, error,
 }: Props) {
   const [filter, setFilter] = useState('')
+
+  // Tutoriál: poprvé automaticky (localStorage), jinak tlačítkem ✦.
+  const [tut, setTut] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    return window.localStorage.getItem(TUT_KEY) === 'done' ? null : 0
+  })
+  const tutFinish = () => {
+    setTut(null)
+    if (typeof window !== 'undefined') window.localStorage.setItem(TUT_KEY, 'done')
+  }
+  const tutTarget = tut !== null ? TUT_STEPS[tut]?.target ?? null : null
 
   const grouped = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -86,8 +132,16 @@ export default function TerminalView({
       />
 
       <div className="term">
+        <button className="ghost tut-reopen" title="Znovu otevřít průvodce terminálem"
+          onClick={() => setTut(0)}>
+          ✦ Tutoriál
+        </button>
+        {tut !== null && (
+          <TerminalTutorial step={tut} onStep={setTut} onFinish={tutFinish} />
+        )}
         {/* ── trh ─────────────────────────────────────────────────────────── */}
-        <section className="panel term__market">
+        <section data-tut="market"
+          className={'panel term__market' + (tutTarget === 'market' ? ' tut-focus' : '')}>
           <h2>Trh<span className="hint">{items.length} položek</span></h2>
           <div className="body">
             <input
@@ -122,7 +176,9 @@ export default function TerminalView({
         </section>
 
         {/* ── kniha + formulář ────────────────────────────────────────────── */}
-        <section className="panel term__book">
+        <section data-tut="book"
+          className={'panel term__book' + (tutTarget === 'book' ? ' tut-focus' : '')}>
+          <PriceSpark history={history} />
           <BookPanel
             book={book}
             fees={fees}
@@ -136,7 +192,7 @@ export default function TerminalView({
         </section>
 
         {/* ── tvoje firma + příkazy + páska ───────────────────────────────── */}
-        <div className="term__side">
+        <div data-tut="side" className={'term__side' + (tutTarget === 'side' ? ' tut-focus' : '')}>
           <section className="panel">
             <h2>
               Tvoje firma

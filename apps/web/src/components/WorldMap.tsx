@@ -30,6 +30,8 @@ type Props = {
   onSelectPlot: (plot: MapPlot | null) => void
   /** rychlost herních hodin (0 = pauza → doprava stojí) */
   clockSpeed: number
+  /** Herní hodina (0–23) pro denní/noční nádech scény. */
+  hourOfDay?: number
   /** hráčem založené cargo trasy — jen po nich něco jezdí */
   routes: TransportRoute[]
 }
@@ -394,7 +396,7 @@ const TERR_PAD = 48
 type View = { x: number; y: number; w: number }
 
 export default function WorldMap({
-  map, myCompanyId, selectedPlotId, onSelectPlot, clockSpeed, routes,
+  map, myCompanyId, selectedPlotId, onSelectPlot, clockSpeed, hourOfDay = 12, routes,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -421,6 +423,8 @@ export default function WorldMap({
   const hoverRef = useRef<string | null>(null)
   const speedRef = useRef(clockSpeed)
   speedRef.current = clockSpeed
+  const hourRef = useRef(hourOfDay)
+  hourRef.current = hourOfDay
   const mapRef = useRef(map)
   mapRef.current = map
   const orderedRef = useRef(ordered)
@@ -670,6 +674,18 @@ export default function WorldMap({
           fillPoly(ctx, diamondPts(c.x, c.y), isSel ? '#58a6ff' : '#ffffff', isSel ? 0.15 : 0.05)
           strokePoly(ctx, diamondPts(c.x, c.y), isSel ? '#58a6ff' : '#ffffff66', isSel ? 1.8 : 1)
         }
+      }
+
+      // 5) denní/noční nádech (screen-space): noc 21–4, soumrak 19–21 a 4–6.
+      const h = hourRef.current
+      let night = 0
+      if (h >= 21 || h < 4) night = 1
+      else if (h >= 19) night = (h - 19) / 2
+      else if (h < 6) night = (6 - h) / 2
+      if (night > 0.02) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.fillStyle = `rgba(9,12,38,${(0.42 * night).toFixed(3)})`
+        ctx.fillRect(0, 0, css.w, css.h)
       }
     }
     raf = requestAnimationFrame(draw)

@@ -24,6 +24,10 @@
 import { balance, post, round6 } from './ledger.ts'
 import { isPlotConnected, roadNetwork } from './logistics.ts'
 import { haulCargo } from './transport.ts'
+import { companyEffects, levelForXp, researchTick, type CompanyEffects } from './progression.ts'
+import { contractsTick } from './contracts.ts'
+import { execsTick, loansTick, recordPriceHistory } from './finance.ts'
+import { npcTick } from './npc.ts'
 import type { Db } from './db.ts'
 import { many, one, tx } from './db.ts'
 
@@ -31,7 +35,7 @@ export const TICK_MS = Number(process.env.TICK_MS ?? 12_000)
 
 type Building = {
   id: number; company_id: number; plot_id: number; level: number; status: string
-  b_code: string; is_retail: boolean
+  b_code: string; is_retail: boolean; industry: string | null
   storage: number; upkeep: number; throughput: number
   recipe_id: number | null; output_qty: number
   output_item_id: number | null; output_code: string | null; retail_base: number | null
@@ -133,16 +137,17 @@ export async function runTick(d: Db, worldId: number) {
     d,
     `SELECT b.id::int, b.company_id::int, b.plot_id::int, b.level::int, b.status::text,
             p.x::int AS x, p.y::int AS y, (r.id IS NOT NULL) AS has_recipe,
-            bt.code AS b_code, bt.is_retail,
-            bt.base_storage::float8 AS storage,
-            bt.base_upkeep_hour::float8 AS upkeep,
-            bt.base_throughput::float8 AS throughput,
+            bt.code AS b_code, bt.is_retail, ind.code AS industry,
+            (bt.base_storage * (1 + bt.level_storage_mult*(b.level-1)))::float8 AS storage,
+            (bt.base_upkeep_hour * (1 + bt.level_upkeep_mult*(b.level-1)))::float8 AS upkeep,
+            (bt.base_throughput * (1 + bt.level_throughput_mult*(b.level-1)))::float8 AS throughput,
             r.id::int AS recipe_id, r.output_qty::float8 AS output_qty,
             oi.id::int AS output_item_id, oi.code AS output_code,
             oi.retail_base::float8 AS retail_base
        FROM buildings b
        JOIN building_types bt ON bt.id = b.type_id
        JOIN plots p ON p.id = b.plot_id
+       LEFT JOIN industries ind ON ind.id = bt.industry_id
        LEFT JOIN recipes r  ON r.building_type_id = bt.id AND r.is_active
        LEFT JOIN items oi   ON oi.id = r.output_item_id
       WHERE b.world_id = $1
@@ -168,6 +173,14 @@ export async function runTick(d: Db, worldId: number) {
   let sold = 0
   let upkeepPaid = 0
   const stockCache = new Map<number, InvRow[]>()
+  // Fáze F: výzkumné/manažerské efekty a XP z výroby (cache na jeden tick)
+  const effCache = new Map<number, CompanyEffects>()
+  const effOf = async (cid: number): Promise<CompanyEffects> => {
+    let e = effCache.get(cid)
+    if (!e) { e = await companyEffects(d, cid); effCache.set(cid, e) }
+    return e
+  }
+  const xpGained = new Map<number, number>()
 
   for (const b of buildings) {
     // dostavěno?
@@ -191,7 +204,8 @@ export async function runTick(d: Db, worldId: number) {
     }
 
     const cash = await balance(d, worldId, { type: 'company', id: b.company_id }, 'cash')
-    const upkeep = round6(b.upkeep * cycles)
+    const eff = await effOf(b.company_id)
+    const upkeep = round6(b.upkeep * cycles * eff.upkeep)
 
     // 1) údržba: bez peněz se neprojede → paused
     if (upkeep > 0) {
@@ -226,9 +240,11 @@ export async function runTick(d: Db, worldId: number) {
         status = 'full'
       } else if (need.length === 0) {
         // extraktor: bere z ložiska, ne ze skladu
-        const qty = Math.min(b.output_qty * cycles, free)
+        const outMult = (eff.outputByIndustry[b.industry ?? ''] ?? 1) * eff.outputAll
+        const qty = Math.min(b.output_qty * cycles * outMult, free)
         await addItems(d, invId, b.output_item_id, qty)
         produced++
+        xpGained.set(b.company_id, (xpGained.get(b.company_id) ?? 0) + 1)
         status = 'producing'
       } else {
         // processor: vstupy napříč sklady firmy (logistika zjednodušená)
@@ -275,9 +291,11 @@ export async function runTick(d: Db, worldId: number) {
               ], { kind: 'utilities_purchase' })
             }
           }
-          const qty = Math.min(b.output_qty * cycles, free)
+          const outMult = (eff.outputByIndustry[b.industry ?? ''] ?? 1) * eff.outputAll
+          const qty = Math.min(b.output_qty * cycles * outMult, free)
           await addItems(d, invId, b.output_item_id, qty)
           produced++
+          xpGained.set(b.company_id, (xpGained.get(b.company_id) ?? 0) + 1)
           status = 'producing'
         }
       }
@@ -295,7 +313,7 @@ export async function runTick(d: Db, worldId: number) {
       )
       const sellQty = Math.min(row?.avail ?? 0, Math.max(b.throughput * 0.25, 1) * cycles)
       if (row && sellQty > 0) {
-        const gross = round6(sellQty * b.retail_base)
+        const gross = round6(sellQty * b.retail_base * eff.retail)
         await takeItems(d, Number(row.id), sellQty)
         await post(d, worldId, [
           { party: { type: 'system' }, kind: 'faucet_retail', amount: -gross,
@@ -317,11 +335,26 @@ export async function runTick(d: Db, worldId: number) {
   // 4) cargo: hráčské dopravní trasy vozí zboží mezi sklady a účtují přepravné
   const haul = await haulCargo(d, worldId, cycles)
 
+  // 5) Fáze F: XP z výroby → posun času → světové systémy → NPC mozky.
+  // Čas se posouvá PŘED kontrakty/výzkumem, aby deadliny porovnávaly už
+  // novou herní hodinu.
+  for (const [cid, n] of xpGained) {
+    await d.query(`UPDATE companies SET xp = xp + $2 WHERE id=$1`, [cid, n])
+  }
   await d.query(
     `UPDATE worlds SET sim_hours = sim_hours + $2 WHERE id=$1`,
     [worldId, cycles],
   )
-  return { produced, sold, upkeep: upkeepPaid, paused: false, haul }
+  const simHours = Number(clock!.hours) + cycles
+  const researchDone = await researchTick(d, worldId, simHours)
+  const contracts = await contractsTick(d, worldId, simHours)
+  await loansTick(d, worldId, cycles)
+  await execsTick(d, worldId, cycles)
+  await recordPriceHistory(d, worldId, simHours)
+  const npc = await npcTick(d, worldId, cycles)
+
+  return { produced, sold, upkeep: upkeepPaid, paused: false, haul,
+           researchDone, contracts, npc }
 }
 
 /**
@@ -337,10 +370,17 @@ export function startTick(getWorldId: () => number) {
     const worldId = getWorldId()
     void tx((t) => runTick(t, worldId))
       .then((s: { produced: number; sold: number; upkeep: number
-                   haul?: { units: number; routes: number } }) => {
-        if (s.produced || s.sold || s.haul?.units) {
+                   haul?: { units: number; routes: number }
+                   researchDone?: number
+                   contracts?: { expired: number; generated: number }
+                   npc?: { sells: number; buys: number; expansions: string[] } }) => {
+        if (s.produced || s.sold || s.haul?.units || s.npc?.sells || s.npc?.buys) {
           const h = s.haul?.units ? `, cargo ${s.haul.units} ks (${s.haul.routes} tras)` : ''
-          console.log(`  ⚙️  tick: výroba ${s.produced}, retail ${s.sold}, údržby ${s.upkeep}${h}`)
+          const n = s.npc && (s.npc.sells || s.npc.buys)
+            ? `, NPC ${s.npc.sells} prodejů/${s.npc.buys} nákupů` : ''
+          const r = s.researchDone ? `, výzkum hotový ×${s.researchDone}` : ''
+          console.log(`  ⚙️  tick: výroba ${s.produced}, retail ${s.sold}, údržby ${s.upkeep}${h}${n}${r}`)
+          for (const x of s.npc?.expansions ?? []) console.log(`  🏗️  expanze ${x}`)
         }
       })
       .catch((e) => console.error('  ⚠️  tick selhal:', e instanceof Error ? e.message : e))

@@ -69,6 +69,68 @@ async function primaryInventoryId(d: Db, companyId: number): Promise<number> {
   return Number(r.id)
 }
 
+/** Zarezervuje zboží sell příkazu napříč inventáři firmy (grepedy dle id). */
+async function reserveGoods(
+  d: Db, companyId: number, itemId: number, tier: number, qty: number, itemCode: string,
+): Promise<number> {
+  const rows = await many<{ id: number; avail: number }>(
+    d,
+    `SELECT ii.id::int, (ii.quantity - ii.reserved_qty)::float8 AS avail
+       FROM inventory_items ii JOIN inventories v ON v.id = ii.inventory_id
+      WHERE v.company_id=$1 AND ii.item_id=$2 AND ii.quality_tier=$3
+        AND ii.quantity - ii.reserved_qty > 0
+      ORDER BY ii.id`,
+    [companyId, itemId, tier],
+  )
+  const total = round6(rows.reduce((acc, r) => acc + r.avail, 0))
+  if (total + 1e-9 < qty) {
+    throw new MarketError(
+      `nedostatek ${itemCode} (tier ${tier}): k dispozici ${total}, požadováno ${qty}`,
+      'insufficient_goods')
+  }
+  let left = qty
+  for (const r of rows) {
+    if (left <= 1e-9) break
+    const take = round6(Math.min(left, r.avail))
+    if (take <= 0) continue
+    await d.query(
+      `UPDATE inventory_items SET reserved_qty = reserved_qty + $2, updated_at = now()
+        WHERE id=$1`,
+      [r.id, take],
+    )
+    left = round6(left - take)
+  }
+  return round6(qty - left)
+}
+
+/** Spotřebuje zarezervované zboží při fillu (quantity i reserved dolů). */
+async function consumeReservedGoods(
+  d: Db, companyId: number, itemId: number, tier: number, qty: number,
+): Promise<void> {
+  const rows = await many<{ id: number; take_max: number }>(
+    d,
+    `SELECT ii.id::int, LEAST(ii.reserved_qty, ii.quantity)::float8 AS take_max
+       FROM inventory_items ii JOIN inventories v ON v.id = ii.inventory_id
+      WHERE v.company_id=$1 AND ii.item_id=$2 AND ii.quality_tier=$3
+        AND ii.reserved_qty > 0
+      ORDER BY ii.id`,
+    [companyId, itemId, tier],
+  )
+  let left = round6(qty)
+  for (const r of rows) {
+    if (left <= 1e-9) break
+    const take = round6(Math.min(left, r.take_max))
+    if (take <= 0) continue
+    await d.query(
+      `UPDATE inventory_items
+          SET quantity = quantity - $2, reserved_qty = reserved_qty - $2, updated_at = now()
+        WHERE id=$1`,
+      [r.id, take],
+    )
+    left = round6(left - take)
+  }
+}
+
 export type PlaceOrderInput = {
   worldId: number
   companyId: number
@@ -168,27 +230,9 @@ export async function placeOrder(d0: Db, input: PlaceOrderInput): Promise<PlaceO
   let escrowed = 0
 
   if (side === 'sell') {
-    // rezervace zboží; pokud není k dispozici, UPDATE zasáhne 0 řádků
-    const r = await d0.query(
-      `UPDATE inventory_items
-          SET reserved_qty = reserved_qty + $1, updated_at = now()
-        WHERE inventory_id = $2 AND item_id = $3 AND quality_tier = $4
-          AND quantity - reserved_qty >= $1`,
-      [qty, inventoryId, itemId, qualityTier],
-    )
-    if ((r.affectedRows ?? 0) === 0) {
-      const have = await one<{ avail: string }>(
-        d0,
-        `SELECT COALESCE(quantity - reserved_qty, 0)::float8::text AS avail
-           FROM inventory_items
-          WHERE inventory_id=$1 AND item_id=$2 AND quality_tier=$3`,
-        [inventoryId, itemId, qualityTier],
-      )
-      throw new MarketError(
-        `nedostatek ${itemCode} (tier ${qualityTier}): k dispozici ${have?.avail ?? 0}, ` +
-        `požadováno ${qty}`, 'insufficient_goods')
-    }
-    reserved = qty
+    // Rezervace napříč VŠEMI sklady firmy: od Fáze E má každá budova vlastní
+    // dvorec a příkazu je jedno, ve kterém zboží leží.
+    reserved = await reserveGoods(d0, companyId, itemId, qualityTier, qty, itemCode)
   } else if (side === 'buy') {
     // Kolik peněz MUSÍME zablokovat, aby příkaz nemohl utratit víc, než má?
     // Základ je nejhorší možná hrubá cena; k tomu rezerva na poplatek, protože
@@ -359,18 +403,31 @@ async function worstCaseSweep(
   return { cost: Number(r?.cost ?? 0), available: Number(r?.available ?? 0) }
 }
 
-/** Vrátí nespotřebované zboží z rezervace zpět mezi volné zásoby. */
+/** Vrátí nespotřebované zboží z rezervace zpět mezi volné zásoby (napříč sklady). */
 async function unreserveGoods(
   d: Db, companyId: number, itemId: number, qualityTier: number, qty: number,
 ): Promise<void> {
-  await d.query(
-    `UPDATE inventory_items ii
-        SET reserved_qty = reserved_qty - $1, updated_at = now()
-       FROM inventories inv
-      WHERE inv.id = ii.inventory_id AND inv.company_id = $2 AND inv.is_primary
-        AND ii.item_id = $3 AND ii.quality_tier = $4`,
-    [round6(qty), companyId, itemId, qualityTier],
+  const rows = await many<{ id: number; res: number }>(
+    d,
+    `SELECT ii.id::int, ii.reserved_qty::float8 AS res
+       FROM inventory_items ii JOIN inventories v ON v.id = ii.inventory_id
+      WHERE v.company_id=$1 AND ii.item_id=$2 AND ii.quality_tier=$3
+        AND ii.reserved_qty > 0
+      ORDER BY ii.id`,
+    [companyId, itemId, qualityTier],
   )
+  let left = round6(qty)
+  for (const r of rows) {
+    if (left <= 1e-9) break
+    const take = round6(Math.min(left, r.res))
+    if (take <= 0) continue
+    await d.query(
+      `UPDATE inventory_items SET reserved_qty = reserved_qty - $2, updated_at = now()
+        WHERE id=$1`,
+      [r.id, take],
+    )
+    left = round6(left - take)
+  }
 }
 
 /**
@@ -415,8 +472,25 @@ type MatchCtx = {
 }
 
 /** Spáruje příchozí příkaz proti booku. Vrací fill-y. */
+/** Multiplikátor poplatků firmy (obchodní manažeři). Cache v rámci jednoho matche. */
+async function feeMultFor(d: Db, cache: Map<number, number>, companyId: number): Promise<number> {
+  let m = cache.get(companyId)
+  if (m === undefined) {
+    const r = await one<{ b: number }>(
+      d,
+      `SELECT COALESCE(bonus_pct, 0)::float8 AS b FROM executives
+        WHERE company_id=$1 AND role='trade'`,
+      [companyId],
+    )
+    m = 1 - Math.min(50, r?.b ?? 0) / 100
+    cache.set(companyId, m)
+  }
+  return m
+}
+
 async function match(d: Db, ctx: MatchCtx): Promise<Fill[]> {
   const fills: Fill[] = []
+  const feeCache = new Map<number, number>()
   let remaining = ctx.qty
 
   while (remaining > 1e-9) {
@@ -467,20 +541,16 @@ async function match(d: Db, ctx: MatchCtx): Promise<Fill[]> {
     const gross = round6(fillQty * price)
     const buyerId = ctx.side === 'buy' ? ctx.companyId : Number(resting.company_id)
     const sellerId = ctx.side === 'sell' ? ctx.companyId : Number(resting.company_id)
-    const feeBuyer = Math.max(FEE_MIN, round6(gross * (ctx.side === 'buy' ? FEE_TAKER : FEE_MAKER)))
-    const feeSeller = Math.max(FEE_MIN, round6(gross * (ctx.side === 'sell' ? FEE_TAKER : FEE_MAKER)))
+    // Obchodní manažeři snižují burzovní poplatky své firmě (relativně).
+    const feeBuyer = Math.max(FEE_MIN, round6(
+      gross * (ctx.side === 'buy' ? FEE_TAKER : FEE_MAKER) * await feeMultFor(d, feeCache, buyerId)))
+    const feeSeller = Math.max(FEE_MIN, round6(
+      gross * (ctx.side === 'sell' ? FEE_TAKER : FEE_MAKER) * await feeMultFor(d, feeCache, sellerId)))
 
     // ---- pohyb ZBOŽÍ --------------------------------------------------------
-    // prodávající: zásoby i rezervace dolů (zboží bylo v escrow od založení orderu)
-    await d.query(
-      `UPDATE inventory_items ii
-          SET quantity = quantity - $1, reserved_qty = reserved_qty - $1,
-              updated_at = now()
-         FROM inventories inv
-        WHERE inv.id = ii.inventory_id AND inv.company_id = $2
-          AND ii.item_id = $3 AND ii.quality_tier = $4`,
-      [fillQty, sellerId, ctx.itemId, ctx.qualityTier],
-    )
+    // prodávající: zásoby i rezervace dolů napříč sklady (zboží bylo v escrow
+    // od založení orderu)
+    await consumeReservedGoods(d, sellerId, ctx.itemId, ctx.qualityTier, fillQty)
     // kupující: zásoby nahoru
     const buyerInv = await primaryInventoryId(d, buyerId)
     await d.query(

@@ -205,6 +205,7 @@ CREATE TABLE companies (
     status          company_status NOT NULL DEFAULT 'active',
     prestige_level  integer     NOT NULL DEFAULT 0,        -- přenáší se mezi sezónami
     legacy_points   integer     NOT NULL DEFAULT 0,        -- přenáší se mezi sezónami
+    xp              bigint      NOT NULL DEFAULT 0,        -- Fáze F: zkušenosti (úroveň = 250·(n−1)·n)
     founded_at      timestamptz NOT NULL DEFAULT now(),
     last_settled_at timestamptz NOT NULL DEFAULT now(),    -- tick engine
     logo_url        text,
@@ -212,7 +213,8 @@ CREATE TABLE companies (
 
     -- 1:N záměrně (ne 1:1), aby šel později přidat holding / více firem na účet
     CONSTRAINT companies_legacy_points_nonneg CHECK (legacy_points >= 0),
-    CONSTRAINT companies_prestige_nonneg      CHECK (prestige_level >= 0)
+    CONSTRAINT companies_prestige_nonneg      CHECK (prestige_level >= 0),
+    CONSTRAINT companies_xp_nonneg            CHECK (xp >= 0)
 );
 -- jméno firmy je unikátní per svět, ne globálně (case-insensitive)
 CREATE UNIQUE INDEX companies_world_name_uniq ON companies (world_id, lower(name));
@@ -580,6 +582,75 @@ CREATE TABLE transport_routes (
 CREATE INDEX transport_routes_company_idx ON transport_routes (world_id, company_id);
 CREATE UNIQUE INDEX transport_routes_pair_uniq
     ON transport_routes (from_plot_id, to_plot_id, mode);
+
+
+-- ============================================================================
+--  7c. FÁZE F — ŽIVÝ SVĚT: úrovně, výzkum, zakázky, půjčky, manažeři, historie
+-- ============================================================================
+
+CREATE TABLE company_research (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    company_id    bigint NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    code          text NOT NULL,
+    done_hours    bigint NOT NULL,             -- sim_hours, kdy výzkum dokončí
+    completed_at  timestamptz,                 -- NULL = běží
+    started_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT company_research_uniq UNIQUE (company_id, code)
+);
+
+CREATE TABLE contracts (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    world_id       bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    item_id        bigint NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+    qty            numeric(20,4) NOT NULL CHECK (qty > 0),
+    unit_price     numeric(24,6) NOT NULL CHECK (unit_price > 0),
+    deadline_hours bigint NOT NULL,            -- sim_hours deadline
+    xp_reward      integer NOT NULL DEFAULT 0 CHECK (xp_reward >= 0),
+    status         text NOT NULL DEFAULT 'open'
+                   CHECK (status IN ('open','taken','done','expired')),
+    company_id     bigint REFERENCES companies(id) ON DELETE SET NULL,
+    taken_at       timestamptz,
+    done_at        timestamptz,
+    created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX contracts_world_status_idx ON contracts (world_id, status);
+
+CREATE TABLE loans (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    world_id     bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    company_id   bigint NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    principal    numeric(24,6) NOT NULL CHECK (principal > 0),
+    outstanding  numeric(24,6) NOT NULL CHECK (outstanding >= 0),
+    rate_hour    numeric(10,6) NOT NULL CHECK (rate_hour >= 0),
+    taken_at     timestamptz NOT NULL DEFAULT now(),
+    closed_at    timestamptz
+);
+CREATE INDEX loans_company_idx ON loans (company_id) WHERE closed_at IS NULL;
+
+CREATE TABLE executives (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    world_id     bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    company_id   bigint NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name         text NOT NULL,
+    role         text NOT NULL CHECK (role IN ('production','logistics','trade')),
+    salary_hour  numeric(20,6) NOT NULL CHECK (salary_hour >= 0),
+    bonus_pct    numeric(6,2) NOT NULL CHECK (bonus_pct > 0),
+    hired_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT executives_role_uniq UNIQUE (company_id, role)
+);
+
+CREATE TABLE price_history (
+    id        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    world_id  bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    item_id   bigint NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    sim_hour  bigint NOT NULL,
+    mid       numeric(24,6),
+    last      numeric(24,6),
+    CONSTRAINT price_history_uniq UNIQUE (world_id, item_id, sim_hour)
+);
+
+-- Kterou firmu právě ovládá hráč (NPC mozek ji vynechává).
+ALTER TABLE worlds ADD COLUMN player_company_id bigint REFERENCES companies(id) ON DELETE SET NULL;
 
 
 -- ============================================================================

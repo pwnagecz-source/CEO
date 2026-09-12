@@ -16,7 +16,16 @@ import {
   placeOrder, recentTrades, type Side,
 } from './market.ts'
 import { seedIfEmpty, worldInfo } from './seed.ts'
-import { buildBuilding, buyPlot, catalog, createCompany, quickSell } from './game.ts'
+import {
+  buildBuilding, buyPlot, catalog, createCompany, demolishBuilding, quickSell,
+  upgradeBuilding,
+} from './game.ts'
+import { companyProgress, levelForXp, researchList, startResearch } from './progression.ts'
+import { deliverContract, listContracts, takeContract } from './contracts.ts'
+import {
+  fireExecutive, hireExecutive, listExecutives, listLoans, pnlToday,
+  priceHistory, repayLoan, takeLoan,
+} from './finance.ts'
 import {
   hireRoadBuilders, isPlotConnected, roadNetwork, shortestRoadPath,
 } from './logistics.ts'
@@ -319,31 +328,42 @@ async function boot() {
 
   // -------------------------------------------------------------- company ---
   app.get('/api/companies', async () => {
-    const rows = await many<{ id: string; name: string; industry: string; status: string }>(
+    const rows = await many<{
+      id: string; name: string; industry: string; status: string
+      xp: number; is_player: boolean
+    }>(
       db,
-      `SELECT c.id::text, c.name, i.code AS industry, c.status::text
+      `SELECT c.id::text, c.name, i.code AS industry, c.status::text, c.xp::float8 AS xp,
+              (w.player_company_id = c.id) AS is_player
          FROM companies c LEFT JOIN industries i ON i.id = c.industry_id
+         JOIN worlds w ON w.id = c.world_id
         WHERE c.world_id = $1 ORDER BY c.id`,
       [worldId],
     )
-    return { companies: rows }
+    return {
+      companies: rows.map((r) => ({ ...r, level: levelForXp(r.xp) })),
+    }
   })
 
   app.get<{ Params: { id: string } }>('/api/companies/:id', async (req, reply) => {
     const companyId = Number(req.params.id)
     const co = await one<{
       id: string; name: string; industry: string; status: string; founded_at: string
+      xp: number; player_company_id: string | null
       cash: number; escrow: number
     }>(
       db,
       `SELECT c.id::text, c.name, i.code AS industry, c.status::text, c.founded_at,
+              c.xp::float8 AS xp,
+              MAX(w.player_company_id)::text AS player_company_id,
               COALESCE(SUM(a.balance) FILTER (WHERE a.kind='cash'),0)::float8 AS cash,
               COALESCE(SUM(a.balance) FILTER (WHERE a.kind='escrow_market'),0)::float8 AS escrow
          FROM companies c
          LEFT JOIN industries i ON i.id = c.industry_id
          LEFT JOIN accounts a ON a.owner_type='company' AND a.owner_id=c.id
+         JOIN worlds w ON w.id = c.world_id
         WHERE c.id=$1 AND c.world_id=$2
-        GROUP BY c.id, c.name, i.code, c.status, c.founded_at`,
+        GROUP BY c.id, c.name, i.code, c.status, c.founded_at, c.xp`,
       [companyId, worldId],
     )
     if (!co) return reply.code(404).send({ error: 'firma nenalezena' })
@@ -409,8 +429,12 @@ async function boot() {
       [worldId, companyId],
     )
 
+    const { xp, player_company_id, ...rest } = co
     return {
-      ...co,
+      ...rest,
+      xp,
+      level: levelForXp(xp),
+      isNpc: Number(player_company_id ?? 0) !== companyId,
       // kontrola proti ledgeru (mělo by sedět přesně)
       ledgerCash: await balance(db, worldId, { type: 'company', id: companyId }, 'cash'),
       buildings, inventory, plots,
@@ -544,6 +568,181 @@ async function boot() {
       try {
         return await tx((t) => buildBuilding(t, worldId, Number(b.companyId),
                                              Number(req.params.id), b.buildingCode))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  // ------------------------------------------------------- Fáze F: živý svět ---
+  /**
+   * Claim: označí firmu jako hráčovu (NPC mozek ji pak vynechává).
+   * Singleplayer bez auth — „přepnutí se do firmy“ je prostě claim.
+   */
+  app.post<{ Params: { id: string } }>('/api/companies/:id/claim', async (req, reply) => {
+    const companyId = Number(req.params.id)
+    const r = await db.query(
+      `UPDATE worlds SET player_company_id=$2
+        WHERE id=$1
+          AND EXISTS (SELECT 1 FROM companies c WHERE c.id=$2 AND c.world_id=$1)`,
+      [worldId, companyId],
+    )
+    if ((r.affectedRows ?? 0) === 0) return reply.code(404).send({ error: 'firma nenalezena' })
+    return { claimed: companyId }
+  })
+
+  /** Progrese firmy: XP, úroveň, stav výzkumného stromu. */
+  app.get<{ Params: { id: string } }>('/api/companies/:id/progression', async (req) => {
+    const companyId = Number(req.params.id)
+    const [progress, research] = await Promise.all([
+      companyProgress(db, companyId),
+      researchList(db, worldId, companyId),
+    ])
+    return { ...progress, research: research.items }
+  })
+
+  /** Odstartování výzkumu (platba z cash → sink_research). */
+  app.post<{ Params: { id: string }; Body: { code: string } }>(
+    '/api/companies/:id/research', async (req, reply) => {
+      const code = req.body?.code
+      if (typeof code !== 'string') return reply.code(400).send({ error: 'code je povinné' })
+      try {
+        return await tx((t) => startResearch(t, worldId, Number(req.params.id), code))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Zakázky světa (open + taken); companyId kvůli příznaku isMine. */
+  app.get<{ Querystring: { companyId?: string } }>('/api/contracts', async (req) => ({
+    contracts: await listContracts(db, worldId,
+      req.query.companyId ? Number(req.query.companyId) : null),
+  }))
+
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/contracts/:id/take', async (req, reply) => {
+      try {
+        return await tx((t) => takeContract(t, worldId, Number(req.body?.companyId),
+                                            Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/contracts/:id/deliver', async (req, reply) => {
+      try {
+        return await tx((t) => deliverContract(t, worldId, Number(req.body?.companyId),
+                                               Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Půjčky: přehled + strop podle úrovně. */
+  app.get<{ Params: { id: string } }>('/api/companies/:id/loans', async (req) =>
+    listLoans(db, Number(req.params.id)))
+
+  app.post<{ Params: { id: string }; Body: { principal: number } }>(
+    '/api/companies/:id/loans', async (req, reply) => {
+      try {
+        return await tx((t) => takeLoan(t, worldId, Number(req.params.id),
+                                        Number(req.body?.principal)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/loans/:id/repay', async (req, reply) => {
+      try {
+        return await tx((t) => repayLoan(t, worldId, Number(req.body?.companyId),
+                                         Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Manažeři: přehled rolí (obsazeno/volno). */
+  app.get<{ Params: { id: string } }>('/api/companies/:id/executives', async (req) => ({
+    executives: await listExecutives(db, Number(req.params.id)),
+  }))
+
+  app.post<{ Params: { id: string }; Body: { role: string } }>(
+    '/api/companies/:id/executives', async (req, reply) => {
+      const role = req.body?.role
+      if (typeof role !== 'string') return reply.code(400).send({ error: 'role je povinná' })
+      try {
+        return await tx((t) => hireExecutive(t, worldId, Number(req.params.id), role))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  app.delete<{ Params: { id: string; role: string } }>(
+    '/api/companies/:id/executives/:role', async (req, reply) => {
+      try {
+        return await tx((t) => fireExecutive(t, worldId, Number(req.params.id),
+                                             req.params.role))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Denní výsledovka z cash noh journalu. */
+  app.get<{ Params: { id: string } }>('/api/companies/:id/pnl', async (req) =>
+    pnlToday(db, worldId, Number(req.params.id)))
+
+  /** Historie cen položky (mid/last po herních hodinách). */
+  app.get<{ Params: { code: string }; Querystring: { hours?: string } }>(
+    '/api/market/:code/history', async (req) => ({
+      history: await priceHistory(db, worldId, req.params.code,
+                                  Number(req.query.hours ?? 96)),
+    }))
+
+  /** Upgrade budovy (brána: úroveň firmy; capex×0,6×level → sink_capex). */
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/buildings/:id/upgrade', async (req, reply) => {
+      try {
+        return await tx((t) => upgradeBuilding(t, worldId, Number(req.body?.companyId),
+                                               Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Demolice budovy (25% odkup státem, trasy dotýkající se pozemku padnou). */
+  app.post<{ Params: { id: string }; Body: { companyId: number } }>(
+    '/api/buildings/:id/demolish', async (req, reply) => {
+      try {
+        return await tx((t) => demolishBuilding(t, worldId, Number(req.body?.companyId),
+                                                Number(req.params.id)))
       } catch (e) {
         if (e instanceof MarketError) {
           return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })

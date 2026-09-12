@@ -67,7 +67,10 @@ export type PlaceOrderResult = {
   cached?: boolean
 }
 
-export type CompanySummary = { id: string; name: string; industry: string; status: string }
+export type CompanySummary = {
+  id: string; name: string; industry: string; status: string
+  xp: number; level: number; is_player: boolean
+}
 
 export type Building = {
   id: string; name: string; code: string; level: number; status: string
@@ -83,6 +86,7 @@ export type InvRow = {
 
 export type Company = {
   id: string; name: string; industry: string; status: string; founded_at: string
+  xp: number; level: number; isNpc: boolean
   cash: number; escrow: number; ledgerCash: number
   buildings: Building[]; inventory: InvRow[]
   plots: { id: string; x: number; y: number; plot_type: string }[]
@@ -189,6 +193,49 @@ export type OpenOrder = {
   qty: number; qty_filled: number; status: string; created_at: string
 }
 
+// ---------------------------------------------------------------------------
+//  Fáze F — progrese, zakázky, finance
+// ---------------------------------------------------------------------------
+
+export type Progress = {
+  xp: number; level: number; nextLevelXp: number | null; progressPct: number
+}
+
+export type ResearchItem = {
+  code: string; name: string; desc: string; tier: 1 | 2 | 3
+  cost: number; hours: number; requires: string | null; minLevel: number
+  state: 'locked' | 'available' | 'running' | 'done'
+  lockReason: string | null; progressPct: number; doneHours: number | null
+}
+
+export type ContractRow = {
+  id: number; item: string; itemName: string; qty: number; unitPrice: number
+  total: number; deadlineHours: number; hoursLeft: number; xpReward: number
+  status: 'open' | 'taken' | 'done' | 'expired'
+  companyId: number | null; isMine: boolean
+}
+
+export type LoanRow = {
+  id: number; principal: number; outstanding: number; rateHour: number
+  takenAt: string; closed: boolean
+}
+
+export type LoansInfo = {
+  loans: LoanRow[]; outstanding: number; capacity: number; level: number
+}
+
+export type ExecRow = {
+  role: 'production' | 'logistics' | 'trade'
+  label: string; effect: string; bonusPct: number
+  salaryHour: number; signingFee: number
+  hired: boolean; name: string | null
+}
+
+export type PnlItem = { kind: string; label: string; total: number; count: number }
+export type Pnl = { items: PnlItem[]; revenue: number; costs: number; net: number }
+
+export type HistoryPoint = { hour: number; mid: number | null; last: number | null }
+
 class ApiError extends Error {
   constructor(readonly status: number, readonly body: unknown, message: string) {
     super(message)
@@ -274,6 +321,48 @@ export const api = {
   reset: () => req<{ ok: boolean; worldId: number; audit: string }>('/demo/reset', {
     method: 'POST', body: '{}',
   }),
+  // ---- Fáze F ----
+  claimCompany: (companyId: string | number) =>
+    req<{ claimed: number }>(`/companies/${companyId}/claim`, { method: 'POST', body: '{}' }),
+  progression: (companyId: string | number) =>
+    req<Progress & { research: ResearchItem[] }>(`/companies/${companyId}/progression`),
+  startResearch: (companyId: string | number, code: string) =>
+    req<{ code: string; cost: number; doneHours: number }>(`/companies/${companyId}/research`, {
+      method: 'POST', body: JSON.stringify({ code }) }),
+  contracts: (companyId?: string | number) =>
+    req<{ contracts: ContractRow[] }>(
+      `/contracts${companyId ? `?companyId=${companyId}` : ''}`),
+  takeContract: (contractId: number, companyId: string | number) =>
+    req<{ id: number; status: string }>(`/contracts/${contractId}/take`, {
+      method: 'POST', body: JSON.stringify({ companyId: Number(companyId) }) }),
+  deliverContract: (contractId: number, companyId: string | number) =>
+    req<{ id: number; paid: number; xp: number; level: number }>(`/contracts/${contractId}/deliver`, {
+      method: 'POST', body: JSON.stringify({ companyId: Number(companyId) }) }),
+  loans: (companyId: string | number) => req<LoansInfo>(`/companies/${companyId}/loans`),
+  takeLoan: (companyId: string | number, principal: number) =>
+    req<{ id: number; principal: number }>(`/companies/${companyId}/loans`, {
+      method: 'POST', body: JSON.stringify({ principal }) }),
+  repayLoan: (loanId: number, companyId: string | number) =>
+    req<{ id: number; repaid: number }>(`/loans/${loanId}/repay`, {
+      method: 'POST', body: JSON.stringify({ companyId: Number(companyId) }) }),
+  executives: (companyId: string | number) =>
+    req<{ executives: ExecRow[] }>(`/companies/${companyId}/executives`),
+  hireExecutive: (companyId: string | number, role: string) =>
+    req<{ role: string; name: string }>(`/companies/${companyId}/executives`, {
+      method: 'POST', body: JSON.stringify({ role }) }),
+  fireExecutive: (companyId: string | number, role: string) =>
+    req<{ role: string; fired: boolean }>(`/companies/${companyId}/executives/${role}`,
+      { method: 'DELETE' }),
+  pnl: (companyId: string | number) => req<Pnl>(`/companies/${companyId}/pnl`),
+  priceHistory: (code: string, hours = 96) =>
+    req<{ history: HistoryPoint[] }>(
+      `/market/${encodeURIComponent(code)}/history?hours=${hours}`),
+  upgradeBuilding: (buildingId: string | number, companyId: string | number) =>
+    req<{ buildingId: number; level: number; cost: number }>(`/buildings/${buildingId}/upgrade`, {
+      method: 'POST', body: JSON.stringify({ companyId: Number(companyId) }) }),
+  demolishBuilding: (buildingId: string | number, companyId: string | number) =>
+    req<{ buildingId: number; refund: number }>(`/buildings/${buildingId}/demolish`, {
+      method: 'POST', body: JSON.stringify({ companyId: Number(companyId) }) }),
 }
 
 export { ApiError }

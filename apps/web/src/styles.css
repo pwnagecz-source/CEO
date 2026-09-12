@@ -817,3 +817,156 @@ button.ghost.is-locked { opacity: .62; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   FÁZE F — ŽIVÝ SVĚT: modaly (výzkum/zakázky/finance), tutoriál, sparkline
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* level chip v HUD */
+.hud-level { position: relative; }
+.xpbar {
+  width: 64px; height: 4px; border-radius: 3px; overflow: hidden;
+  background: rgba(255,255,255,.12); margin-top: 3px;
+}
+.xpbar > i { display: block; height: 100%; background: var(--grad); transition: width .4s ease; }
+
+/* tlačítko pro nebezpečné akce (demolice) */
+button.ghost.danger:hover { border-color: #f85149; color: #f85149; background: rgba(248,81,73,.1); }
+
+/* okna modalů */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(4,7,12,.66); backdrop-filter: blur(3px);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 48px 16px; overflow-y: auto;
+}
+.modal {
+  width: min(880px, 100%);
+  background: var(--panel-solid);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 40px 90px -30px rgba(0,0,0,.9);
+  padding: 18px 20px 22px;
+  animation: ceo-rise .28s cubic-bezier(.2,.7,.3,1) both;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.modal-head h2 { margin: 0; font-size: 17px; }
+.modal-head .ghost { font-size: 13px; }
+.modal-sub { margin: 2px 0 12px; font-size: 12px; }
+.insp-ok {
+  margin: 8px 0; padding: 8px 12px; font-size: 12px; border-radius: var(--r);
+  background: rgba(63,185,80,.12); border: 1px solid rgba(63,185,80,.4); color: #56d364;
+}
+
+/* progrese (hlavička výzkumu) */
+.prog-hero {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: center;
+  padding: 12px 14px; margin-bottom: 12px;
+  background: var(--raised); border: 1px solid var(--border); border-radius: var(--r);
+}
+.prog-hero__lvl { font-size: 15px; font-weight: 700; grid-row: span 2; }
+.prog-hero__bar { height: 8px; border-radius: 5px; background: rgba(255,255,255,.1); overflow: hidden; }
+.prog-hero__bar > i { display: block; height: 100%; background: var(--grad); transition: width .4s ease; }
+.prog-hero__xp { font-family: var(--mono); font-size: 11px; }
+.prog-hero__hint { grid-column: 1 / -1; margin: 2px 0 0; font-size: 11.5px; }
+
+/* výzkumný strom */
+.research-tier { margin-bottom: 14px; }
+.research-tier h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.research-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.rcard {
+  padding: 10px 12px; border-radius: var(--r);
+  background: var(--raised); border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 6px; min-height: 104px;
+}
+.rcard__name { font-size: 13px; font-weight: 650; }
+.rcard__desc { font-size: 11.5px; line-height: 1.35; }
+.rcard--done { border-color: rgba(63,185,80,.45); }
+.rcard--running { border-color: rgba(88,166,255,.5); }
+.rcard--locked { opacity: .55; }
+.rcard__bar { height: 6px; border-radius: 4px; background: rgba(255,255,255,.1); overflow: hidden; }
+.rcard__bar > i { display: block; height: 100%; background: var(--accent); transition: width .5s ease; }
+.rcard__run { display: flex; flex-direction: column; gap: 4px; font-size: 11px; margin-top: auto; }
+.rcard__lock { font-size: 11px; margin-top: auto; }
+.rcard__done { font-size: 11px; margin-top: auto; }
+.rcard__go { margin-top: auto; }
+
+/* zakázky */
+.contract-sec { margin-bottom: 14px; }
+.contract-sec h3 { margin: 0 0 8px; font-size: 12.5px; }
+.contract-sec h3.dim { color: var(--text-dim); }
+.crowd {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; margin-bottom: 6px;
+  background: var(--raised); border: 1px solid var(--border); border-radius: var(--r);
+}
+.crowd--mine { border-color: rgba(139,123,255,.55); }
+.crowd--taken { opacity: .5; }
+.crowd__main { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.crowd__name { font-weight: 650; font-size: 13px; }
+.crowd__meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.crowd__meta strong { color: var(--text); }
+.crowd__deadline { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.crowd__deadline.is-urgent { color: #f85149; font-weight: 700; }
+
+/* finance */
+.fin-sec { margin-bottom: 16px; }
+.fin-sec h3 { margin: 0 0 8px; font-size: 12.5px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.fin-h { font-family: var(--mono); font-size: 11px; font-weight: 400; }
+.pnl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pnl-table td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.05); }
+.pnl-table td:last-child { text-align: right; font-family: var(--mono); }
+.pnl-table td.pos { color: #3fb950; }
+.pnl-table td.neg { color: #f85149; }
+.pnl-net td { border-top: 1px solid var(--border); border-bottom: none; padding-top: 7px; }
+.loan-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.exec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.exec-card {
+  padding: 10px 12px; border-radius: var(--r);
+  background: var(--raised); border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.exec-card.is-hired { border-color: rgba(63,185,80,.45); }
+.exec-card__role { font-weight: 650; font-size: 13px; }
+.exec-card__eff { font-size: 11.5px; color: var(--accent); }
+.exec-card__name { font-size: 12px; }
+.exec-card__salary { font-family: var(--mono); font-size: 11px; }
+.exec-card__btn { margin-top: auto; align-self: flex-start; }
+
+/* sparkline v terminálu */
+.spark { padding: 8px 12px 2px; }
+.spark__head { display: flex; justify-content: space-between; font-size: 11px; font-family: var(--mono); }
+.spark__head .pos { color: #3fb950; }
+.spark__head .neg { color: #f85149; }
+.spark__svg { width: 100%; height: 40px; display: block; }
+
+/* terminálový tutoriál */
+.tut-reopen {
+  position: absolute; top: -34px; left: 0; z-index: 5;
+  font-size: 11.5px; padding: 3px 10px;
+}
+.term { position: relative; }
+.tut-overlay {
+  position: fixed; inset: 0; z-index: 70; pointer-events: none;
+  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 34px;
+}
+.tut-card {
+  pointer-events: auto; width: min(520px, calc(100% - 32px));
+  background: var(--panel-solid); border: 1px solid var(--accent-2);
+  border-radius: 12px; padding: 14px 16px;
+  box-shadow: 0 24px 70px -18px rgba(139,123,255,.55);
+  animation: ceo-rise .3s cubic-bezier(.2,.7,.3,1) both;
+}
+.tut-card__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.tut-card__head strong { color: var(--accent-2); font-size: 12.5px; letter-spacing: .04em; }
+.tut-card__skip { font-size: 11px; }
+.tut-card p { margin: 0 0 12px; font-size: 12.5px; line-height: 1.5; }
+.tut-card__btns { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tut-dots { display: flex; gap: 5px; }
+.tut-dots > i { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,.18); }
+.tut-dots > i.is-on { background: var(--accent-2); }
+.term__market, .term__book, .term__side { transition: box-shadow .25s ease, opacity .25s ease; }
+.tut-focus {
+  box-shadow: 0 0 0 2px var(--accent-2), 0 0 34px -6px rgba(139,123,255,.6);
+  border-radius: var(--r);
+}
+.term:has(.tut-overlay) [data-tut]:not(.tut-focus) { opacity: .45; }

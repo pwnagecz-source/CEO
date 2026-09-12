@@ -24,6 +24,11 @@ type Props = {
   onBuild: (plot: MapPlot, code: string) => void
   onNewCompany: () => void
   onOpenTerminal: () => void
+  onOpenResearch: () => void
+  onOpenContracts: () => void
+  onOpenFinance: () => void
+  onUpgrade: (buildingId: string) => void
+  onDemolish: (buildingId: string) => void
   onQuickSell: (itemCode: string) => void
   onHireRoad: (plot: MapPlot) => void
   onOpenCodex: () => void
@@ -54,10 +59,18 @@ const STATUS_LABEL: Record<string, string> = {
 export default function GameView({
   map, catalog, company, companies, companyId, onSelectCompany, macro, audit,
   selectedPlot, onSelectPlot, onBuy, onBuild, onNewCompany, onOpenTerminal, onQuickSell,
-  onHireRoad, onOpenCodex, onSpeed, quests, clock, roadQuote,
+  onHireRoad, onOpenCodex, onOpenResearch, onOpenContracts, onOpenFinance,
+  onUpgrade, onDemolish, onSpeed, quests, clock, roadQuote,
   routes, routeFrom, routeQuote, routeQuoteErr, onRouteFrom, onCreateRoute, onDeleteRoute,
   busy, err,
 }: Props) {
+  // Úrovňová křivka je stejná jako na serveru: xpForLevel(n) = 250·(n−1)·n
+  const coLevel = company?.level ?? 1
+  const coXp = company?.xp ?? 0
+  const xpPrev = 250 * (coLevel - 1) * coLevel
+  const xpNext = coLevel >= 10 ? null : 250 * coLevel * (coLevel + 1)
+  const xpPct = xpNext === null ? 100
+    : Math.min(100, Math.round(((coXp - xpPrev) / (xpNext - xpPrev)) * 100))
   const terminalLocked = quests !== null && !quests.terminalUnlocked
   // Cargo formulář: vybraný druh dopravy a počet vozidel pro aktuální nabídku.
   const [rMode, setRMode] = useState<RouteMode>('truck')
@@ -121,6 +134,11 @@ export default function GameView({
             <span className="hud-k">Pozemky</span>
             <span className="hud-v">{myPlots.length}</span>
           </div>
+          <div className="hud-stat hud-level" title={`${coXp} XP${xpNext !== null ? ` · další úroveň v ${xpNext} XP` : ' · max'}`}>
+            <span className="hud-k">Úroveň</span>
+            <span className="hud-v">⭐ {coLevel}</span>
+            <div className="xpbar"><i style={{ width: `${xpPct}%` }} /></div>
+          </div>
           <div className="hud-stat">
             <span className="hud-k">Ekonomika světa</span>
             <span className="hud-v dim">{compact(macro?.m2)}</span>
@@ -128,6 +146,9 @@ export default function GameView({
         </div>
         <div className="hud-right">
           {audit && <span className={`badge ${audit.ok ? 'pass' : 'fail'}`}>{audit.ok ? 'svět v pořádku' : 'pozor'}</span>}
+          <button className="ghost" title="Státní zakázky — garantovaný odbyt" onClick={onOpenContracts}>📋 Zakázky</button>
+          <button className="ghost" title="Úrovně, XP a výzkumný strom" onClick={onOpenResearch}>🔬 Výzkum</button>
+          <button className="ghost" title="Výsledovka, půjčky, manažeři" onClick={onOpenFinance}>💰 Finance</button>
           <button className="ghost" onClick={onOpenCodex}>📖 Kniha</button>
           <button className="ghost" onClick={onNewCompany}>＋ Nová firma</button>
           <button
@@ -151,6 +172,7 @@ export default function GameView({
             selectedPlotId={selectedPlot?.id ?? null}
             onSelectPlot={onSelectPlot}
             clockSpeed={clock?.speed ?? 1}
+            hourOfDay={clock?.hour ?? 12}
             routes={routes}
           />
           {routeFrom && (
@@ -243,6 +265,29 @@ export default function GameView({
                       </button>
                     )}
                   </div>
+                  {selectedPlot.owner_id === companyId && (
+                    <div className="insp-cargo-btns">
+                      {(() => {
+                        const bt = catalog.find((c) => c.code === selectedPlot.b_code)
+                        const lvl = selectedPlot.b_level ?? 1
+                        const atMax = bt ? lvl >= bt.max_level : false
+                        const cost = bt ? Math.round(bt.capex * 0.6 * lvl * 100) / 100 : 0
+                        return (
+                          <button className="ghost" disabled={!!busy || atMax}
+                            title={atMax ? 'Maximální úroveň'
+                              : `+30 % výkon, +35 % sklad (úroveň firmy musí být ${lvl + 1}+)`}
+                            onClick={() => onUpgrade(selectedPlot.b_id!)}>
+                            {atMax ? '⬆ Max úroveň' : `⬆ Upgrade · ${money(cost)}`}
+                          </button>
+                        )
+                      })()}
+                      <button className="ghost danger" disabled={!!busy}
+                        title="Zbourá budovu; stát odkoupí 25 % capexu × úroveň. Trasy přes pozemek se zruší."
+                        onClick={() => onDemolish(selectedPlot.b_id!)}>
+                        🧨 Zbourat
+                      </button>
+                    </div>
+                  )}
                   <table className="insp-table">
                     <tbody>
                       <tr><td className="dim">Úroveň</td><td>{selectedPlot.b_level}</td></tr>

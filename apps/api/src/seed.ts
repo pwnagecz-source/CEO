@@ -11,6 +11,7 @@ import type { Db } from './db.ts'
 import { many, one } from './db.ts'
 import { post, round6, type AccountKind } from './ledger.ts'
 import { FEE_MIN, FEE_TAKER } from './market.ts'
+import { generateContracts } from './contracts.ts'
 import { createRoute } from './transport.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -318,6 +319,9 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
   }
 
   await seedDemoCompanies(d, worldId, itemId, buildingTypeId)
+
+  // Fáze F: svět startuje se 4 otevřenými státními zakázkami
+  await generateContracts(d, worldId, 0, 4)
 
   const counts = await one<{ i: string; b: string; r: string; p: string }>(
     d,

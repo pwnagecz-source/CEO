@@ -20,6 +20,7 @@
  */
 import { MarketError } from './market.ts'
 import { balance, post, round6 } from './ledger.ts'
+import { companyEffects } from './progression.ts'
 import type { Db } from './db.ts'
 import { many, one } from './db.ts'
 
@@ -328,13 +329,20 @@ export async function haulCargo(
   let units = 0
   let fees = 0
   let active = 0
+  // Fáze F: výzkum (dispečink/návěsy) a ředitel logistiky zvyšují kapacitu tras
+  const capMult = new Map<number, number>()
   for (const r of routes) {
+    let mult = capMult.get(r.company_id)
+    if (mult === undefined) {
+      mult = (await companyEffects(d, r.company_id)).transport
+      capMult.set(r.company_id, mult)
+    }
     const fromInv = await one<{ id: string }>(
       d, `SELECT id::text FROM inventories WHERE company_id=$1 AND plot_id=$2 LIMIT 1`,
       [r.company_id, r.from_plot_id],
     )
     if (!fromInv) continue
-    const capacity = r.capacity_per_hour * cycles
+    const capacity = r.capacity_per_hour * cycles * mult
 
     // kolik je v odkadišti volných zásob (nerezervovaných)
     const stock = await many<{ id: number; item_id: number; avail: number }>(
