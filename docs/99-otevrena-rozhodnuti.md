@@ -200,3 +200,21 @@ nebo přibydou animované postavičky/efekty, procedurální kresby narazí na s
 čitelnosti ve změti tahů. Tehdy: hybrid — pozadí a terén procedurálně, budovy jako
 sprite atlas (2–3 varianty × 8 směrů není nutné, izometrie je fixní), `skinFor`/
 `drawBuildingArt` fungují jako seam k výměně.
+
+## ADR-013 — Přechod mapy z Canvas 2D na Three.js (WebGL)
+
+**Stav:** ✅ ROZHODNUTO 2026-09-12 (po prezentační vlně, na přání hráče)
+**Rozhodnutí:** renderer světa je **Three.js** (stylizovaný low-poly, perspective
+kamera v izometrickém pásmu, OrbitControls: posun/zoom/omezené natáčení). Dřívější
+Canvas 2D vrstva (`drawTileBase`/`drawBuilding`/`drawTruck`) i `buildingArt.ts` jdou pryč.
+**Důvod:** hráč viděl ve 2D „strop řemesla" — procedurální kresby se při zoomu
+rozpadají a pohled působí ploše. 3D geometrie navíc dává zdarma to, co by se ve 2D
+simulovalo těžko: skutečné stíny, světlo dne/noci, hloubku pro pozdější **stavbu
+jednotlivých pater přímo v budovách** (patra jsou už teď samostatné `floor-N`
+podgroupy) a interiéry. Three.js je pro solo vývoj nejnižší práh entry (žádný
+engine, žádné assety, vše procedurálně v kódu).
+**Důsledek:** rozhraní vůči Reactu se nemění (`setMap`/`applyPlots`/`setRoutes`/
+`setClock`), SSE delta protokol zůstává; výkon drží instancovaný terén a sdílené
+materiály/geometrie. `render-map.tsx` (SVG kontrola) je historický artefakt.
+**Riziko / kdy přehodnotit:** low-poly bez textur může časem působit sterilně —
+pak přidat jemné textury terénu a vertex-color detaily, ne měnit renderer.

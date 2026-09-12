@@ -55,6 +55,7 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | **Cargo simulace:** hráčem zakládané dopravní trasy (odkud → kam, 🚚/🚢, 1–8 vozidel), tick po nich vozí zboží mezi dvorci budov a účtuje přepravné za svezené jednotky; na mapě jezdí náklaďáky a lodě JEN po založených trasách (jednosměrný okruh), trasy jsou vykreslené čárkovaně | ✅ |
 | **Fáze F — živý svět:** NPC firmy hrají stejnou hru jako hráč (prodávají přebytky, nakupují vstupy, expandují přes `placeOrder`/`buyPlot`/`buildBuilding`), úrovně a XP firmy (výroba/zakázky/výzkum), výzkumný strom 10 uzlů ve 3 tierech, státní zakázky s prémií a termínem, půjčky se stropem dle úrovně, manažeři (výroba/logistika/obchod), denní výsledovka z journalu, historie cen se sparkline, upgrade a demolice budov, denní/noční cyklus na mapě, tutoriál terminálu | ✅ |
 | **Prezentační vlna:** 28 procedurálně kreslených variant budov (headframe dolu, pumpjack, solární pole, rafinerie s hořákem, pec s výhní, neonové lahůdky…), stavba jako jeřáb+oplocení, silniční síť s asfaltem/štěrkem/přerušovanou čarou podle křižovatek, náklaďáky s návěsy a lodě s kontejnery (směr jízdy, barva nákladu dle linky), noční světla v oknech a neonech, toast notifikace (zakázky/výzkum/úrovně/akce), feed „Svět se hýbe“ (události NPC, výzkumy, level-upy ze `world_events`), HUD badgy, ESC zavírá modaly, tutoriál terminálu se ukáže pokaždé s možností trvalého vypnutí, Inter Variable + designové leštění | ✅ |
+| **3D svět (Three.js):** stylizovaný low-poly renderer místo Canvas 2D — procedurální modely 28 typů budov s patry jako `floor-N` podgroupami (podklad pro budoucí editaci pater), staveniště s jeřábem, instancovaný terén se stromy a skálami, silnice s křižovatkami, náklaďáky a lodě na cargo linkách, slunce se stíny a den/noc (emisivní okna, neony, flare), OrbitControls s izometrickým pásmem, raycast picking; seed bez figurantské hráčské firmy, likviditu dřeva drží NPC Silva Trade | ✅ |
 | Expertní terminál (volitelný, zúžený na obchodování): přehled trhu s hledáním, order book s hloubkou, zadávání příkazů s odhadem exekuce, moje příkazy, páska obchodů, stavová lišta invariantů | ✅ |
 | Tick engine (výroba, údržba, retail) | ✅ · NPC mozek v ticku ✅ |
 | Auth, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — singleplayer bez registrace, svět místo hráče obývají NPC firmy |
@@ -79,7 +80,8 @@ apps/web/src/
   api.ts       typovaný klient (relativní cesty → Vite proxy)
   estimate.ts  odhad exekuce proti booku (stejná logika jako engine)
   game/        izometrická projekce (iso.ts), art direction (art.ts) a
-               procedurální kresby budov dle typu + staveniště (buildingArt.ts)
+               three/ — 3D scéna světa (WorldScene), procedurální low-poly
+               modely budov (buildings3d), vozidla (vehicles3d), materiály
   components/  SetupScreen (průvodce), GameView + WorldMap (Canvas 2D, cargo doprava,
                denní/noční tint, noční světla, silnice s křižovatkami), QuestRail,
                CodexView (kniha), TerminalView (sparkline historie), BookPanel,

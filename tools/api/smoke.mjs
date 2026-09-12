@@ -47,12 +47,16 @@ check('audit po resetu', (await j('/audit')).verdict, 'PASS')
 
 const macro0 = await j('/macro')
 const co1Before = await j('/companies/1')
-const co2Before = await j('/companies/2')
+// snapshot pokladen všech firem — maker obchodu [3] už není pevně firma 2
+const cashSnap = new Map()
+for (const c of (await j('/companies')).companies) {
+  cashSnap.set(String(c.id), Number((await j(`/companies/${c.id}`)).cash))
+}
 console.log(`\n[1] výchozí stav`)
 console.log(`    M2 = ${macro0.m2}, vytvořeno = ${macro0.moneyCreated}, zničeno = ${macro0.moneyDestroyed}`)
 check('identita M2 == ΔM', macro0.m2, macro0.deltaM, 0.01)
 check('firma 1 má cash > 0', co1Before.cash > 0, true)
-console.log(`    ${co1Before.name}: cash=${co1Before.cash}  ${co2Before.name}: cash=${co2Before.cash}`)
+console.log(`    ${co1Before.name}: cash=${co1Before.cash}`)
 
 // ── book před obchodem ──────────────────────────────────────────────────────
 const bookBefore = await j('/market/log')
@@ -67,7 +71,7 @@ const PRICE = 0.115                       // cena odpočívajícího (maker) př
 const gross = QTY * PRICE
 const feeTaker = gross * FEE_TAKER        // kupující = taker
 const feeMaker = gross * FEE_MAKER        // prodávající = maker
-console.log(`\n[3] MARKET BUY ${QTY} × log (firma 1 → firma 2)`)
+console.log(`\n[3] MARKET BUY ${QTY} × log (firma 1 → maker z booku)`)
 console.log(`    nezávislý přepočet: gross=${gross.toFixed(6)} ` +
             `taker=${feeTaker.toFixed(6)} maker=${feeMaker.toFixed(6)} sink=${(feeTaker + feeMaker).toFixed(6)}`)
 
@@ -89,14 +93,15 @@ check('počet fillů', o.fills.length, 1)
 
 // ── peníze: nezávislá kontrola proti ledgeru ────────────────────────────────
 const co1After = await j('/companies/1')
-const co2After = await j('/companies/2')
+const makerId = String(o.fills[0].counterparty)
+const makerAfter = await j(`/companies/${makerId}`)
 const macro1 = await j('/macro')
 
 console.log(`\n[4] peníze — nezávislý přepočet vs. ledger`)
 check('firma 1 zaplatila gross+taker',
   co1Before.cash - co1After.cash, gross + feeTaker, 1e-4)
-check('firma 2 dostala gross−maker',
-  co2After.cash - co2Before.cash, gross - feeMaker, 1e-4)
+check(`maker (${makerAfter.name}) dostal gross−maker`,
+  makerAfter.cash - (cashSnap.get(makerId) ?? 0), gross - feeMaker, 1e-4)
 check('sink_exchange_fee = oba poplatky',
   macro1.sinks.sink_exchange_fee, feeTaker + feeMaker, 1e-4)
 check('M2 kleslo přesně o poplatky (jediný způsob, jak peníze mizí)',
@@ -143,8 +148,11 @@ const wash = await post('/orders', {
   companyId: 2, itemCode: 'log', side: 'buy', qty: 50, priceLimit: 0.50,
 })
 const washFills = wash.body.fills ?? []
-const selfMatch = washFills.some((f) => f.buyerCompanyId === f.sellerCompanyId)
-check('žádný fill nemá stejného kupujícího a prodávajícího', selfMatch, false)
+// fill z pohledu zadavatele: counterparty nesmí být on sám
+const selfMatch = washFills.some((f) => String(f.counterparty) === '2')
+check('žádný fill wash příkazu není se sebou samým', selfMatch, false)
+check('wash příkaz našel protiúčty jen u cizích firem',
+  washFills.length > 0 && washFills.every((f) => String(f.counterparty) !== '2'), true)
 
 // ── limitní příkaz, který se nekříží → musí ZŮSTAT v booku ──────────────────
 console.log(`\n[9] nekřížící limitní příkaz zůstává v booku`)

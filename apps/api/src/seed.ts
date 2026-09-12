@@ -357,6 +357,7 @@ const HOME_ANCHORS = [
   { x: Math.round(GRID_W * 0.16), y: Math.round(GRID_H * 0.40) },  // Borealis — les
   { x: Math.round(GRID_W * 0.84), y: Math.round(GRID_H * 0.30) },  // Krupp — důl
   { x: Math.round(GRID_W * 0.50), y: GRID_H - 2 },                 // Panetteria — voda
+  { x: Math.round(GRID_W * 0.50), y: Math.round(GRID_H * 0.35) },  // Silva — střed
 ]
 
 const DEMO_COMPANIES: DemoCo[] = [
@@ -387,6 +388,14 @@ const DEMO_COMPANIES: DemoCo[] = [
       { code: 'bakery', plotType: 'industrial', level: 1 },
     ],
     inventory: { grain: 2500, flour: 700, bread: 1800 },
+  },
+  {
+    // obchodní společnost: sklad + likvidita dřeva pro order book (market maker)
+    name: 'Silva Trade', industry: 'construction', cash: 50_000,
+    buildings: [
+      { code: 'warehouse', plotType: 'industrial', level: 1 },
+    ],
+    inventory: { log: 4000, planks: 1500 },
   },
 ]
 
@@ -566,19 +575,21 @@ async function placeSeedOrders(
 ) {
   type Q = { item: string; side: 'buy' | 'sell'; price: number; qty: number; co: number }
   const quotes: Q[] = [
-    // indexy `co` míří na DEMO_COMPANIES: 0 dřevo, 1 metallurgie, 2 food
-    { item: 'log', side: 'sell', price: 0.1150, qty: 500, co: 0 },
-    { item: 'log', side: 'sell', price: 0.1200, qty: 800, co: 0 },
-    { item: 'log', side: 'buy', price: 0.1000, qty: 400, co: 0 },
-    { item: 'planks', side: 'sell', price: 0.3100, qty: 300, co: 0 },
-    { item: 'planks', side: 'sell', price: 0.3250, qty: 450, co: 0 },
-    { item: 'planks', side: 'buy', price: 0.2900, qty: 250, co: 0 },
+    // indexy `co` míří na DEMO_COMPANIES: 0 dřevo, 1 metallurgie, 2 food, 3 trade
+    // (likviditu dřeva drží Silva, aby smoke obchody firmy 1 nenarážely na anti-wash)
+    { item: 'log', side: 'sell', price: 0.1150, qty: 500, co: 3 },
+    { item: 'log', side: 'sell', price: 0.1200, qty: 800, co: 3 },
+    { item: 'log', side: 'buy', price: 0.1000, qty: 400, co: 3 },
+    { item: 'planks', side: 'sell', price: 0.3100, qty: 300, co: 3 },
+    { item: 'planks', side: 'sell', price: 0.3250, qty: 450, co: 3 },
+    { item: 'planks', side: 'buy', price: 0.2900, qty: 250, co: 3 },
     { item: 'iron_ore', side: 'sell', price: 0.2500, qty: 400, co: 1 },
     { item: 'iron_ingot', side: 'sell', price: 1.5200, qty: 120, co: 1 },
     { item: 'iron_ingot', side: 'buy', price: 1.3800, qty: 80, co: 1 },
     { item: 'bread', side: 'sell', price: 0.0990, qty: 1500, co: 2 },
     { item: 'power', side: 'sell', price: 0.0520, qty: 5000, co: 0 },
     { item: 'power', side: 'buy', price: 0.0480, qty: 3000, co: 1 },
+    { item: 'planks', side: 'buy', price: 0.3000, qty: 200, co: 1 },
   ]
   for (const q of quotes) {
     const companyId = companyIds[q.co]
