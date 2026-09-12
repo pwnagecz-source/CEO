@@ -9,6 +9,7 @@ type Props = {
   version: string | null
   onRefresh: () => void
   onReset: () => void
+  onOpenGame: () => void
   busy: boolean
 }
 
@@ -18,7 +19,7 @@ type Props = {
  * takže M2 a jeho změna patří na nejviditelnější místo.
  */
 export default function Header({
-  macro, audit, worldId, engine, version, onRefresh, onReset, busy,
+  macro, audit, worldId, engine, version, onRefresh, onReset, onOpenGame, busy,
 }: Props) {
   // Peníze v ekonomice mohou vzniknout jen faucetem a zaniknout jen sinkem.
   // Tahle identita (M2 == vytvořeno − zničeno) je hlídaná i v DB.
@@ -71,6 +72,9 @@ export default function Header({
         </div>
       </div>
 
+      <button className="ghost" onClick={onOpenGame} title="Izometrická mapa světa">
+        ← Hra
+      </button>
       <button className="ghost" onClick={onRefresh} disabled={busy}>
         {busy ? '…' : 'Obnovit'}
       </button>

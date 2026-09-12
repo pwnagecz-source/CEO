@@ -61,6 +61,51 @@ async function boot() {
   // ----------------------------------------------------------------- world ---
   app.get('/api/world', async () => ({ worlds: await worldInfo(db), current: worldId }))
 
+  // ------------------------------------------------------------------- map ---
+  /**
+   * Celá mřížka světa pro izometrickou mapu: všech 288 pozemků s terénem,
+   * vlastníkem a budovou (pokud na pozemku stojí).
+   *
+   * Na rozdíl od /api/companies/:id (které vrací jen POZEMKY FIRMY) tohle je
+   * pohled „shora na svět“ — mapa potřebuje i cizí a volné dlaždice, jinak by
+   * hráč neviděl, kde může stavět a kde už někdo je.
+   */
+  app.get('/api/map', async () => {
+    const grid = await one<{ w: number; h: number }>(
+      db,
+      `SELECT plot_grid_w::int AS w, plot_grid_h::int AS h FROM worlds WHERE id=$1`,
+      [worldId],
+    )
+    const plots = await many<{
+      id: string; x: number; y: number; type: string; status: string
+      owner_id: string | null; owner_name: string | null
+      b_id: string | null; b_code: string | null; b_name: string | null
+      b_level: number | null; b_status: string | null; b_retail: boolean | null
+      b_output: string | null; b_industry: string | null; b_tier: number | null
+      richness: number
+    }>(
+      db,
+      `SELECT p.id::text, p.x::int, p.y::int, p.plot_type::text AS type, p.status::text,
+              p.owner_company_id::text AS owner_id, c.name AS owner_name,
+              b.id::text AS b_id, bt.code AS b_code, bt.name AS b_name,
+              b.level::int AS b_level, b.status::text AS b_status,
+              bt.is_retail AS b_retail, oi.code AS b_output,
+              ind.code AS b_industry, oi.tier::int AS b_tier,
+              p.deposit_richness::float8 AS richness
+         FROM plots p
+         LEFT JOIN companies c        ON c.id = p.owner_company_id
+         LEFT JOIN buildings b        ON b.plot_id = p.id
+         LEFT JOIN building_types bt  ON bt.id = b.type_id
+         LEFT JOIN industries ind     ON ind.id = bt.industry_id
+         LEFT JOIN recipes r          ON r.building_type_id = bt.id
+         LEFT JOIN items oi           ON oi.id = r.output_item_id
+        WHERE p.world_id = $1
+        ORDER BY p.y, p.x`,
+      [worldId],
+    )
+    return { grid: { w: grid?.w ?? 24, h: grid?.h ?? 12 }, plots }
+  })
+
   app.get('/api/macro', async () => {
     const macro = await macroSnapshot(db, worldId)
     const counts = await one<{

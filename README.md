@@ -32,6 +32,7 @@ npm run smoke        # end-to-end test obchodního cyklu (API musí běžet)
 npm run db:check     # spustí celou migraci na skutečném PostgreSQL 18 (WASM)
 npm run db:validate  # levnější: jen PostgreSQL parser (pglast)
 npm run typecheck    # oba workspacy
+npm run render:map --workspace @ceo/web   # mapa → /tmp/map.svg (vizuální kontrola)
 ```
 
 `npm run smoke` přepočítává peníze **nezávisle na implementaci** — hrubou cenu,
@@ -46,7 +47,8 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | Matching engine: CLOB, price-time priority, limit + market (IOC), escrow, maker/taker poplatky, anti-wash, idempotence, rušení příkazů | ✅ end-to-end otestováno |
 | Pět audit invariantů včetně makro identity `M2 ≡ ΔM` a hlídače úniku escrow | ✅ |
 | Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 288 pozemků, 4 demo firmy, 12 úvodních příkazů | ✅ |
-| Webový terminál: order book s hloubkou, zadávání příkazů s odhadem exekuce, P&L firmy, sklad, páska obchodů, stavová lišta invariantů | ✅ |
+| **Herní pohled (výchozí):** izometrická mapa světa 24×12 s biomy, budovami, vlastnictvím a inspektorem pozemku; HUD s penězi a skladem | ✅ |
+| Expertní terminál (volitelný): order book s hloubkou, zadávání příkazů s odhadem exekuce, P&L firmy, sklad, páska obchodů, stavová lišta invariantů | ✅ |
 | Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
 
 ### Struktura
@@ -61,7 +63,10 @@ apps/api/src/
 apps/web/src/
   api.ts       typovaný klient (relativní cesty → Vite proxy)
   estimate.ts  odhad exekuce proti booku (stejná logika jako engine)
-  components/  Header, ItemsPanel, BookPanel, CompanyPanel, TradeTape, Footer
+  game/        izometrická projekce (iso.ts) a art direction (art.ts)
+  components/  GameView + WorldMap (herní pohled), Header, ItemsPanel, BookPanel,
+               CompanyPanel, TradeTape, Footer (expertní terminál)
+apps/web/render-map.tsx  vyrenderuje mapu na SVG pro vizuální kontrolu bez prohlížeče
 tools/
   db/check_ddl.mjs      spuštění DDL na skutečném Postgresu, statement po statementu
   api/smoke.mjs         end-to-end test s nezávislým přepočtem peněz

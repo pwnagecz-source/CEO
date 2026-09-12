@@ -282,6 +282,19 @@ type DemoCo = {
   inventory: Record<string, number>
 }
 
+/**
+ * Domovské kotvy demo firem. Každá firma dostane budovy co nejblíž své kotvě,
+ * takže svět vypadá jako čtyři malé osady, ne jako nahodile rozházené kostky
+ * (a ne jako jedna linka podél okraje, což dělalo původní „ORDER BY id LIMIT 1“).
+ * Kotvy jsou zvolené podle rozmístění biomů: les vlevo, důl vpravo, voda dole.
+ */
+const HOME_ANCHORS = [
+  { x: 4, y: 4 },   // Tvá Firma — les + průmysl vlevo nahoře
+  { x: 4, y: 8 },   // Borealis Woods — les vlevo dole
+  { x: 19, y: 4 },  // Krupp Metall — důl vpravo
+  { x: 12, y: 9 },  // Panetteria Verde — voda/farma dole
+]
+
 const DEMO_COMPANIES: DemoCo[] = [
   {
     name: 'Tvá Firma', industry: 'timber', cash: 25_000,
@@ -358,12 +371,15 @@ async function seedDemoCompanies(
     // budovy + pozemky
     let primaryPlotId: number | null = null
     for (const b of co.buildings) {
+      // Nejbližší volný pozemek správného biomu k domovské kotvě firmy.
+      const anchor = HOME_ANCHORS[idx % HOME_ANCHORS.length] ?? { x: 12, y: 6 }
       const plot = await one<{ id: string }>(
         d,
         `SELECT id FROM plots
           WHERE world_id = $1 AND plot_type = $2 AND status = 'unowned'
-          ORDER BY id LIMIT 1`,
-        [worldId, b.plotType],
+          ORDER BY (x - $3) * (x - $3) + (y - $4) * (y - $4)
+          LIMIT 1`,
+        [worldId, b.plotType, anchor.x, anchor.y],
       )
       if (!plot) throw new Error(`seed: došly pozemky typu ${b.plotType}`)
       const plotId = Number(plot.id)

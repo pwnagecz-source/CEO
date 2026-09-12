@@ -110,6 +110,20 @@ export type Trade = {
   gross: number; buyer: string; seller: string; executed_at: string
 }
 
+export type MapPlot = {
+  id: string; x: number; y: number; type: string; status: string
+  owner_id: string | null; owner_name: string | null
+  b_id: string | null; b_code: string | null; b_name: string | null
+  b_level: number | null; b_status: string | null; b_retail: boolean | null
+  b_output: string | null; b_industry: string | null; b_tier: number | null
+  richness: number
+}
+
+export type MapData = {
+  grid: { w: number; h: number }
+  plots: MapPlot[]
+}
+
 export type OpenOrder = {
   id: string; item: string; side: 'buy' | 'sell'; price_limit: number | null
   qty: number; qty_filled: number; status: string; created_at: string
@@ -141,6 +155,7 @@ export const api = {
   audit: () => req<Audit>('/audit'),
   items: () => req<{ items: Item[]; fees: { maker: number; taker: number } }>('/items'),
   companies: () => req<{ companies: CompanySummary[] }>('/companies'),
+  map: () => req<MapData>('/map'),
   company: (id: string | number) => req<Company>(`/companies/${id}`),
   book: (code: string, tier = 1) =>
     req<Book>(`/market/${encodeURIComponent(code)}?tier=${tier}`),

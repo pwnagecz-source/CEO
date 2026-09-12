@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError, api,
   type Audit, type Book, type Company, type CompanySummary, type Item,
-  type Macro, type OpenOrder, type PlaceOrderResult, type Trade,
+  type Macro, type MapData, type MapPlot, type OpenOrder, type PlaceOrderResult, type Trade,
 } from './api'
 import BookPanel from './components/BookPanel'
+import GameView from './components/GameView'
 import CompanyPanel from './components/CompanyPanel'
 import Footer from './components/Footer'
 import Header from './components/Header'
@@ -35,6 +36,11 @@ export default function App() {
   const [company, setCompany] = useState<Company | null>(null)
   const [orders, setOrders] = useState<OpenOrder[]>([])
   const [itemCode, setItemCode] = useState(DEFAULT_ITEM)
+  const [map, setMap] = useState<MapData | null>(null)
+  const [selectedPlot, setSelectedPlot] = useState<MapPlot | null>(null)
+  // Výchozí pohled je HRA. Terminál (expertní) je na jedno kliknutí, ale není to
+  // první věc, kterou nový hráč uvidí.
+  const [mode, setMode] = useState<'game' | 'terminal'>('game')
   const [book, setBook] = useState<Book | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [lastSync, setLastSync] = useState<Date | null>(null)
@@ -48,8 +54,9 @@ export default function App() {
     if (inFlight.current) return
     inFlight.current = true
     try {
-      const [h, m, a, it, cos, tr] = await Promise.all([
+      const [h, m, a, it, cos, tr, mp] = await Promise.all([
         api.health(), api.macro(), api.audit(), api.items(), api.companies(), api.trades(),
+        api.map(),
       ])
       setHealth({ worldId: h.worldId, engine: h.engine, version: h.version })
       setMacro(m)
@@ -58,6 +65,7 @@ export default function App() {
       setFees(it.fees)
       setCompanies(cos.companies)
       setTrades(tr.trades)
+      setMap(mp)
       setFatal(null)
 
       const cid = companyId ?? cos.companies[0]?.id ?? null
@@ -172,6 +180,25 @@ export default function App() {
     ? (company.inventory.find((r) => r.item === book.item.code)?.available ?? 0)
     : 0
 
+  // ── HERNÍ POHLED (výchozí) ───────────────────────────────────────────────
+  if (mode === 'game') {
+    return (
+      <GameView
+        map={map}
+        company={company}
+        companies={companies}
+        companyId={companyId}
+        onSelectCompany={(id) => void selectCompany(id)}
+        macro={macro}
+        audit={audit}
+        selectedPlot={selectedPlot}
+        onSelectPlot={setSelectedPlot}
+        onOpenTerminal={() => setMode('terminal')}
+      />
+    )
+  }
+
+  // ── EXPERTNÍ TERMINÁL ────────────────────────────────────────────────────
   return (
     <div className="app">
       <Header
@@ -182,6 +209,7 @@ export default function App() {
         version={health?.version ?? null}
         onRefresh={() => void refresh()}
         onReset={() => void reset()}
+        onOpenGame={() => setMode('game')}
         busy={busy}
       />
 

@@ -364,3 +364,71 @@ footer.bottom {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #3d4859; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   HERNÍ POHLED — izometrická mapa + HUD
+   ═══════════════════════════════════════════════════════════════════════ */
+.game { display: grid; grid-template-rows: auto 1fr; height: 100%; min-height: 0; }
+
+.hud {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 10px 16px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.hud-left { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.hud-right { display: flex; align-items: center; gap: 10px; }
+.hud-company {
+  background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--text);
+  border-radius: 6px; padding: 7px 10px; font-weight: 600; font-size: 13.5px;
+  font-family: var(--sans); width: auto;
+}
+.hud-stat { display: flex; flex-direction: column; }
+.hud-k { font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint); }
+.hud-v { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+.hud-v.money { color: var(--bid); font-size: 18px; font-weight: 600; }
+
+.game-body { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+@media (max-width: 900px) { .game-body { grid-template-columns: 1fr; } .inspector { border-left: none !important; border-top: 1px solid var(--border); } }
+
+.map-wrap { position: relative; min-height: 0; overflow: hidden; background: var(--bg); }
+.worldmap { width: 100%; height: 100%; display: block; }
+.worldmap .tile { cursor: pointer; }
+.worldmap .tile:hover polygon:first-of-type { filter: brightness(1.18); }
+
+.map-legend {
+  position: absolute; left: 12px; bottom: 12px; display: flex; gap: 12px; flex-wrap: wrap;
+  background: rgba(11,14,19,.78); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 10px; backdrop-filter: blur(4px);
+}
+.lg { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-dim); }
+.lg i { width: 11px; height: 11px; border-radius: 2px; border: 1px solid; display: inline-block; }
+.lg i.dot { border-radius: 50%; border: none; width: 8px; height: 8px; }
+
+.inspector {
+  border-left: 1px solid var(--border); background: var(--bg-panel);
+  padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+}
+.insp-empty h3 { margin: 0 0 6px; font-size: 14px; }
+.insp-empty p { margin: 0 0 8px; font-size: 12px; }
+.insp-head { display: flex; justify-content: space-between; align-items: baseline; }
+.insp-coord { font-family: var(--mono); color: var(--accent); font-size: 13px; }
+.insp-owner {
+  border: 1px solid var(--border-strong); border-left-width: 3px; border-radius: 4px;
+  padding: 6px 9px; font-size: 12.5px; display: flex; align-items: center; gap: 8px;
+}
+.insp-building h3 { margin: 0 0 4px; font-size: 15px; }
+.insp-status { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 8px; }
+.insp-table { width: 100%; }
+.insp-table td { border: none; padding: 2px 0; font-size: 12.5px; }
+.insp-table td:first-child { width: 45%; }
+.insp-tip { margin-top: auto; border-top: 1px solid var(--border); padding-top: 10px; }
+.insp-tip h4 { margin: 0 0 4px; font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint); }
+.insp-tip p { margin: 0; font-size: 11.5px; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 3px; vertical-align: middle; }
+button.ghost.wide { width: 100%; }
+
+/* produkce / stav — jemný pohyb, aby mapa žila */
+@keyframes ceo-pulse { 0%,100% { opacity: 1; r: 2.4; } 50% { opacity: .45; r: 3.4; } }
+.worldmap .pulse { animation: ceo-pulse 1.6s ease-in-out infinite; }
+@keyframes ceo-smoke { 0% { transform: translateY(0); opacity: .5; } 100% { transform: translateY(-14px); opacity: 0; } }
+.worldmap .smoke { animation: ceo-smoke 2.4s linear infinite; }
