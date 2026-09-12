@@ -120,6 +120,13 @@ function layoutPlots(w: number, h: number) {
   const forestCols = Math.max(3, Math.round(w * 0.13))  // les vlevo
   const mineCols = Math.max(4, Math.round(w * 0.13))    // důl vpravo
 
+  // Hlavní státní tahy dřív než biomy: silnice musí protnout i les a vodu
+  // (mosty), jinak by deposits neměly kde se napojit. Osy protnou město
+  // (bulváry), okruh kolem centra přidáváme až po komerci.
+  const hy = Math.floor(h / 2), vx = Math.floor(w / 2)
+  take((_x, y) => y === hy, 'road', total)
+  take((x) => x === vx, 'road', total)
+
   take((_x, y) => y >= h - waterRows, 'water', frac(0.07))
   take((x) => x < forestCols, 'forest', frac(0.13))
   take((x, y) => x >= w - mineCols && y < h - waterRows, 'mine', frac(0.11))
@@ -129,12 +136,6 @@ function layoutPlots(w: number, h: number) {
   take((x, y) =>
     (x === u1 || x === u1 + 1 || x === u2 || x === u2 + 1) && y < h - waterRows,
     'utility', total)
-
-  // Hlavní státní tahy: vodorovná + svislá osa PROTNOUT město (bulváry),
-  // takže silniční síť existuje dřív, než se rozparceluje centrum.
-  const hy = Math.floor(h / 2), vx = Math.floor(w / 2)
-  take((_x, y) => y === hy, 'road', total)
-  take((x) => x === vx, 'road', total)
 
   // komerce = centrum města, civic = malé jádro, průmysl = všechno ostatní
   const cw = Math.round(w * 0.30), ch = Math.round(h * 0.34)
@@ -430,11 +431,16 @@ async function seedDemoCompanies(
     for (const b of co.buildings) {
       // Nejbližší volný pozemek správného biomu k domovské kotvě firmy.
       const anchor = HOME_ANCHORS[idx % HOME_ANCHORS.length] ?? { x: 12, y: 6 }
+      // Demo firmy staví u hlavního tahu: bez napojení by jejich produkce
+      // stála a nový hráč by viděl mrtvý svět místo živé ekonomiky.
       const plot = await one<{ id: string }>(
         d,
-        `SELECT id FROM plots
-          WHERE world_id = $1 AND plot_type = $2 AND status = 'unowned'
-          ORDER BY (x - $3) * (x - $3) + (y - $4) * (y - $4)
+        `SELECT p.id FROM plots p
+          WHERE p.world_id = $1 AND p.plot_type = $2 AND p.status = 'unowned'
+            AND EXISTS (SELECT 1 FROM plots n
+                         WHERE n.world_id = $1 AND n.plot_type = 'road'
+                           AND abs(n.x - p.x) + abs(n.y - p.y) = 1)
+          ORDER BY (p.x - $3) * (p.x - $3) + (p.y - $4) * (p.y - $4)
           LIMIT 1`,
         [worldId, b.plotType, anchor.x, anchor.y],
       )

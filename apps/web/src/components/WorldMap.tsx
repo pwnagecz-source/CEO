@@ -332,7 +332,8 @@ function buildRoutes(map: MapData): Route[] {
   }
   const routes: Route[] = []
   for (const p of map.plots) {
-    if (!p.b_id || p.b_status !== 'producing' || !p.connected) continue
+    // auto jezdí, dokud má budova co odvážet: výroba i plný sklad (= čeká na odvoz)
+    if (!p.b_id || (p.b_status !== 'producing' && p.b_status !== 'full') || !p.connected) continue
     if (routes.length >= 40) break
     let entry: string | null = null
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
