@@ -1,7 +1,8 @@
-import type { Audit, CatalogRow, Company, Macro, MapData, MapPlot } from '../api'
+import type { Audit, CatalogRow, Company, Macro, MapData, MapPlot, QuestState } from '../api'
 import { compact, money, pct } from '../fmt'
 import { STATUS_GLOW, TERRAIN, terrainFor } from '../game/art'
 import { ownerColor } from '../game/iso'
+import QuestRail from './QuestRail'
 import WorldMap from './WorldMap'
 
 type Props = {
@@ -19,6 +20,8 @@ type Props = {
   onBuild: (plot: MapPlot, code: string) => void
   onNewCompany: () => void
   onOpenTerminal: () => void
+  onQuickSell: (itemCode: string) => void
+  quests: QuestState | null
   busy: string | null
   err: string | null
 }
@@ -34,8 +37,10 @@ const STATUS_LABEL: Record<string, string> = {
  */
 export default function GameView({
   map, catalog, company, companies, companyId, onSelectCompany, macro, audit,
-  selectedPlot, onSelectPlot, onBuy, onBuild, onNewCompany, onOpenTerminal, busy, err,
+  selectedPlot, onSelectPlot, onBuy, onBuild, onNewCompany, onOpenTerminal, onQuickSell,
+  quests, busy, err,
 }: Props) {
+  const terminalLocked = quests !== null && !quests.terminalUnlocked
   const myPlots = map?.plots.filter((p) => p.owner_id === companyId) ?? []
   const myBuildings = myPlots.filter((p) => p.b_id)
   const cash = company?.cash ?? 0
@@ -81,7 +86,15 @@ export default function GameView({
         <div className="hud-right">
           {audit && <span className={`badge ${audit.ok ? 'pass' : 'fail'}`}>{audit.ok ? 'svět v pořádku' : 'pozor'}</span>}
           <button className="ghost" onClick={onNewCompany}>＋ Nová firma</button>
-          <button className="ghost" onClick={onOpenTerminal}>Terminál →</button>
+          <button
+            className={'ghost' + (terminalLocked ? ' is-locked' : '')}
+            title={terminalLocked
+              ? 'Terminál se odemkne po prvním prodeji (úkol „Prodej první zboží“)'
+              : 'Expertní order book a příkazy'}
+            onClick={onOpenTerminal}
+          >
+            {terminalLocked ? '🔒 Terminál' : 'Terminál →'}
+          </button>
         </div>
       </div>
 
@@ -106,6 +119,7 @@ export default function GameView({
         </div>
 
         <aside className="inspector">
+          <QuestRail quests={quests} />
           {busy && <div className="insp-busy">{busy}</div>}
           {err && <div className="insp-err">{err}</div>}
 
@@ -199,6 +213,22 @@ export default function GameView({
 
               <button className="ghost wide" onClick={() => onSelectPlot(null)}>Zavřít</button>
             </>
+          )}
+
+          {(company?.inventory ?? []).some((r) => r.available > 0) && (
+            <div className="insp-stock">
+              <h3>Tvůj sklad</h3>
+              {(company?.inventory ?? []).filter((r) => r.available > 0).map((r) => (
+                <div key={`${r.item}-${r.quality_tier}`} className="stock-row">
+                  <span className="stock-row__name">{r.name}</span>
+                  <span className="stock-row__qty">{Math.round(r.available)} ks</span>
+                  <button className="btn btn--sm" disabled={!!busy}
+                    title="Prodat vše najednou (market order)"
+                    onClick={() => onQuickSell(r.item)}>⚡ Prodat</button>
+                </div>
+              ))}
+              <p className="dim">Prodej jde přes order book — cenu určuje trh, ne hra.</p>
+            </div>
           )}
 
           <div className="insp-tip">

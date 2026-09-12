@@ -617,6 +617,64 @@ footer.bottom {
 .summary span { color: var(--text-dim); }
 
 /* ══════════════════════════════════════════════════════════════════════
+   QUEST RAIL — učitel herní smyčky
+   ══════════════════════════════════════════════════════════════════════ */
+.quest {
+  border-radius: var(--r); padding: 13px 14px;
+  background: linear-gradient(160deg, rgba(88,166,255,.14), rgba(139,123,255,.07) 60%, transparent);
+  border: 1px solid rgba(88,166,255,.3);
+}
+.quest__head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.quest__tag {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: #06101f; background: var(--grad); border-radius: 999px; padding: 2px 8px; font-weight: 700;
+}
+.quest__title { font-size: 13.5px; font-weight: 700; }
+.quest__bar {
+  height: 5px; border-radius: 999px; background: rgba(255,255,255,.09);
+  margin: 9px 0 8px; overflow: hidden;
+}
+.quest__bar i {
+  display: block; height: 100%; border-radius: 999px; background: var(--grad-money);
+  transition: width .5s cubic-bezier(.2,.7,.3,1);
+}
+.quest__desc { margin: 0 0 6px; font-size: 11.5px; color: var(--text-dim); }
+.quest__hint {
+  margin: 0; font-size: 11.5px; color: #cfe3ff;
+  background: rgba(88,166,255,.1); border-radius: var(--r-sm); padding: 7px 9px;
+}
+.quest__reward { margin: 7px 0 0; font-size: 11px; color: var(--warn); }
+.quest__toggle {
+  margin-top: 10px; background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--text-faint); font-size: 10.5px; font-family: var(--sans);
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.quest__toggle:hover { color: var(--accent); }
+.quest__list { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.quest__list li {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: baseline;
+  font-size: 11.5px; color: var(--text-faint); padding: 3px 6px; border-radius: 6px;
+}
+.quest__list li.is-done { color: var(--bid); }
+.quest__list li.is-active { color: var(--text); background: rgba(88,166,255,.1); }
+.quest__mark { font-family: var(--mono); }
+.quest__prog { font-family: var(--mono); font-size: 10.5px; }
+
+button.ghost.is-locked { opacity: .62; }
+
+/* sklad s rychlým prodejem */
+.insp-stock { border-radius: var(--r); padding: 12px; background: var(--raised); border: 1px solid var(--border); }
+.insp-stock h3 { margin: 0 0 8px; font-size: 13px; }
+.insp-stock p { margin: 8px 0 0; font-size: 10.5px; }
+.stock-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
+  padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.stock-row:last-of-type { border-bottom: none; }
+.stock-row__name { font-size: 12.5px; }
+.stock-row__qty { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+
+/* ══════════════════════════════════════════════════════════════════════
    ANIMACE (mapa „žije“)
    ══════════════════════════════════════════════════════════════════════ */
 @keyframes ceo-pulse { 0%,100% { opacity: 1; r: 2.4; } 50% { opacity: .45; r: 3.6; } }

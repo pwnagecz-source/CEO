@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError, api,
   type Audit, type Book, type CatalogRow, type Company, type CompanySummary, type Item,
-  type Macro, type MapData, type MapPlot, type OpenOrder, type PlaceOrderResult, type Trade,
+  type Macro, type MapData, type MapPlot, type OpenOrder, type PlaceOrderResult,
+  type QuestState, type Trade,
 } from './api'
 import GameView from './components/GameView'
 import SetupScreen from './components/SetupScreen'
@@ -40,6 +41,7 @@ export default function App() {
   const [orders, setOrders] = useState<OpenOrder[]>([])
   const [itemCode, setItemCode] = useState(DEFAULT_ITEM)
   const [map, setMap] = useState<MapData | null>(null)
+  const [quests, setQuests] = useState<QuestState | null>(null)
   const [selectedPlot, setSelectedPlot] = useState<MapPlot | null>(null)
   // Výchozí pohled je HRA. Terminál (expertní) je na jedno kliknutí, ale není to
   // první věc, kterou nový hráč uvidí.
@@ -83,9 +85,14 @@ export default function App() {
       const cid = companyId ?? cos.companies[0]?.id ?? null
       if (cid) {
         setCompanyId(cid)
-        const [co, oo] = await Promise.all([api.company(cid), api.orders(cid)])
+        const [co, oo, qs] = await Promise.all([
+          api.company(cid), api.orders(cid), api.quests(cid),
+        ])
         setCompany(co)
         setOrders(oo.orders)
+        setQuests(qs)
+      } else {
+        setQuests(null)
       }
 
       const code = it.items.some((x) => x.code === itemCode) ? itemCode : DEFAULT_ITEM
@@ -148,6 +155,11 @@ export default function App() {
   const buildAt = (p: MapPlot, code: string) => void gameAction('Stavím…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
     await api.build(p.id, Number(companyId), code)
+  })
+
+  const quickSell = (itemCode: string) => void gameAction('Prodávám…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.quickSell(companyId, itemCode)
   })
 
   async function place(p: {
@@ -245,6 +257,8 @@ export default function App() {
         onBuild={buildAt}
         onNewCompany={() => setSetup(true)}
         onOpenTerminal={() => setMode('terminal')}
+        onQuickSell={quickSell}
+        quests={quests}
         busy={actBusy}
         err={actErr}
       />

@@ -124,6 +124,17 @@ export type MapData = {
   plots: MapPlot[]
 }
 
+export type Quest = {
+  code: string; title: string; desc: string; hint: string
+  done: boolean; have: number; need: number; reward: string | null
+}
+
+export type QuestState = {
+  quests: Quest[]
+  active: Quest | null
+  terminalUnlocked: boolean
+}
+
 export type CatalogRow = {
   code: string; name: string; industry: string; plot_type: string
   capex: number; upkeep_hour: number; throughput: number; storage: number
@@ -180,6 +191,11 @@ export const api = {
     req<{ orderId: number; cancelled: boolean; releasedQty: number; releasedCash: number }>(
       `/orders/${orderId}?companyId=${companyId}`, { method: 'DELETE' }),
   catalog: () => req<{ buildings: CatalogRow[] }>('/buildings/catalog'),
+  quests: (companyId: string | number) => req<QuestState>(`/companies/${companyId}/quests`),
+  quickSell: (companyId: string | number, itemCode: string) =>
+    req<{ orderId: number; qtyFilled: number; avgPrice: number | null; totalGross: number }>(
+      `/companies/${companyId}/quicksell`, {
+        method: 'POST', body: JSON.stringify({ itemCode }) }),
   createCompany: (name: string, industryCode: string) =>
     req<{ companyId: number; startingCapital: number }>('/companies', {
       method: 'POST', body: JSON.stringify({ name, industryCode }) }),

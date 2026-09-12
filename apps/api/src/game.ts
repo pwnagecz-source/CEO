@@ -10,7 +10,7 @@
  * Záměrně žádné „free“ zkratky: i v sandboxu musí každá koruna mít druhou stranu,
  * jinak by si hráč mohl nastartovat inflaci, kterou by pak viděl v makro číslech.
  */
-import { MarketError } from './market.ts'
+import { MarketError, placeOrder, type PlaceOrderResult } from './market.ts'
 import { post, round6 } from './ledger.ts'
 import type { Db } from './db.ts'
 import { one, many } from './db.ts'
@@ -191,4 +191,34 @@ export async function buildBuilding(
   )
   await ensurePrimaryInventory(d, worldId, companyId, plotId)
   return { buildingId: Number(b!.id), capex }
+}
+
+/**
+ * „Prodat vše“ jedním klikem: market sell order na celé volné množství položky.
+ *
+ * Tohle je ta SIMPLE ACTION z designového zadání: hluboký CLOB a limitky
+ * zůstávají v Terminálu pro experty, ale hráč na začátku potřebuje jedině
+ * proměnit sklad v peníze. Escrow, poplatky i anti-wash řeší stejný
+ * placeOrder jako terminál — žádná paralelní logika prodeje.
+ */
+export async function quickSell(
+  d: Db, worldId: number, companyId: number, itemCode: string,
+): Promise<PlaceOrderResult> {
+  const row = await one<{ q: string }>(
+    d,
+    `SELECT COALESCE(SUM(ii.quantity - ii.reserved_qty),0)::text AS q
+       FROM inventory_items ii
+       JOIN inventories v ON v.id = ii.inventory_id
+       JOIN items i ON i.id = ii.item_id
+      WHERE v.company_id=$1 AND i.code=$2`,
+    [companyId, itemCode],
+  )
+  const qty = Number(row?.q ?? 0)
+  if (qty <= 0) {
+    throw new MarketError('nic k prodeji — sklad téhle položky je prázdný', 'nothing_to_sell')
+  }
+  return placeOrder(d, {
+    worldId, companyId, itemCode, qualityTier: 1,
+    side: 'sell', qty, orderType: 'market',
+  })
 }

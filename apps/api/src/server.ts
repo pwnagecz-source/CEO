@@ -14,7 +14,9 @@ import {
   placeOrder, recentTrades, type Side,
 } from './market.ts'
 import { seedIfEmpty, worldInfo } from './seed.ts'
-import { buildBuilding, buyPlot, catalog, createCompany } from './game.ts'
+import { buildBuilding, buyPlot, catalog, createCompany, quickSell } from './game.ts'
+import { questState } from './quests.ts'
+import { startTick, TICK_MS } from './tick.ts'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'   // musí být 0.0.0.0 kvůli live preview
@@ -49,6 +51,10 @@ async function boot() {
     console.log(`  ${a.ok ? '✅' : '❌'} audit invariantů po seedu: ` +
       `${a.ok ? 'čistý' : JSON.stringify(a)}`)
   }
+
+  // Produkční tick: svět žije i bez hráče (výroba, údržby, retail prodejny).
+  startTick(() => worldId)
+  console.log(`  ⚙️  produkční tick co ${TICK_MS / 1000} s`)
 
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 })
   await app.register(cors, { origin: true })
@@ -399,6 +405,28 @@ async function boot() {
       try {
         return await tx((t) => buildBuilding(t, worldId, Number(b.companyId),
                                              Number(req.params.id), b.buildingCode))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Questový řetěz firmy (odvozený ze stavu světa, viz quests.ts). */
+  app.get<{ Params: { id: string } }>('/api/companies/:id/quests', async (req) =>
+    questState(db, worldId, Number(req.params.id)))
+
+  /** „Prodat vše“ jedním klikem — market sell order na volné množství položky. */
+  app.post<{ Params: { id: string }; Body: { itemCode: string } }>(
+    '/api/companies/:id/quicksell', async (req, reply) => {
+      const code = req.body?.itemCode
+      if (typeof code !== 'string' || !code) {
+        return reply.code(400).send({ error: 'itemCode je povinné' })
+      }
+      try {
+        return await tx((t) =>
+          quickSell(t, worldId, Number(req.params.id), code))
       } catch (e) {
         if (e instanceof MarketError) {
           return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })

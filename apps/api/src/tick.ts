@@ -1,0 +1,304 @@
+/**
+ * Produkční tick — srdce, které dělá z mapy živý svět.
+ *
+ * Jednou za TICK_MS (výchozí 12 s = jedna „herní hodina“) projde všechny budovy
+ * a udělá tři věci, vždycky přes podvojný ledger:
+ *
+ *   1. ÚDRŽBA   cash −upkeep  → sink_upkeep        (peníze zanikají)
+ *   2. VÝROBA   vstupy ze skladu → výstup do skladu (zboží, ne peníze)
+ *   3. RETAIL   sklad −zboží  → cash +tržba z faucet_retail (peníze vznikají)
+ *
+ * Proč tohle patří do Fáze B: onboardingové questy („rozběhni výrobu“,
+ * „prodej první zboží“) potřebují, aby se ve světě něco opravdu hýbalo.
+ * Bez ticku by budova po postavění jen stála a hráč by neměl co prodat.
+ *
+ * Stavové kódy budov jsou zároveň UI jazyk:
+ *   producing = vyrábí · starved = chybí vstupy · full = sklad plný ·
+ *   paused = není na údržbu · construction = staví se · idle = stojí
+ *
+ * Ekonomická kázeň: tick NESMÍ vytvořit ani zničit peníze jinde než přes
+ * faucets/sinks (údržba, retail), jinak by se rozbila makro identita M2 ≡ ΔM,
+ * kterou hlídá audit. Výroba samotná peníze nehýbe — jen přesouvá hodnotu
+ * mezi skladovými položkami.
+ */
+import { balance, post, round6 } from './ledger.ts'
+import type { Db } from './db.ts'
+import { many, one, tx } from './db.ts'
+
+export const TICK_MS = Number(process.env.TICK_MS ?? 12_000)
+
+type Building = {
+  id: number; company_id: number; plot_id: number; level: number; status: string
+  b_code: string; is_retail: boolean
+  storage: number; upkeep: number; throughput: number
+  recipe_id: number | null; output_qty: number
+  output_item_id: number | null; output_code: string | null; retail_base: number | null
+}
+
+type Input = { recipe_id: number; item_id: number; code: string; qty: number; base_price: number }
+
+type InvRow = { id: number; inventory_id: number; item_id: number; code: string; avail: number }
+
+/** Sklad firmy na konkrétním pozemku; kdyby chyběl, založí se (budova už stojí). */
+async function plotInventory(
+  d: Db, worldId: number, companyId: number, plotId: number,
+): Promise<number> {
+  const hit = await one<{ id: string }>(
+    d,
+    `SELECT id::text FROM inventories WHERE company_id=$1 AND plot_id=$2 LIMIT 1`,
+    [companyId, plotId],
+  )
+  if (hit) return Number(hit.id)
+  const prim = await one<{ id: string }>(
+    d,
+    `SELECT id::text FROM inventories WHERE company_id=$1 AND is_primary LIMIT 1`,
+    [companyId],
+  )
+  if (prim) return Number(prim.id)
+  const inv = await one<{ id: string }>(
+    d,
+    `INSERT INTO inventories (world_id, company_id, plot_id, name)
+     VALUES ($1,$2,$3,'provoz') RETURNING id::text`,
+    [worldId, companyId, plotId],
+  )
+  return Number(inv!.id)
+}
+
+/** Volné (nerezervované) zásoby firmy po všech skladech, seřazené pro odběr. */
+async function companyStock(d: Db, companyId: number): Promise<InvRow[]> {
+  return many<InvRow>(
+    d,
+    `SELECT ii.id::int, ii.inventory_id::int, ii.item_id::int, i.code,
+            (ii.quantity - ii.reserved_qty)::float8 AS avail
+       FROM inventory_items ii
+       JOIN inventories v ON v.id = ii.inventory_id
+       JOIN items i ON i.id = ii.item_id
+      WHERE v.company_id = $1 AND ii.quantity - ii.reserved_qty > 0
+      ORDER BY ii.id`,
+    [companyId],
+  )
+}
+
+async function addItems(d: Db, invId: number, itemId: number, qty: number) {
+  await d.query(
+    `INSERT INTO inventory_items (inventory_id, item_id, quality_tier, quantity)
+     VALUES ($1,$2,1,$3)
+     ON CONFLICT (inventory_id, item_id, quality_tier)
+     DO UPDATE SET quantity = inventory_items.quantity + EXCLUDED.quantity,
+                   updated_at = now()`,
+    [invId, itemId, round6(qty)],
+  )
+}
+
+async function takeItems(d: Db, rowId: number, qty: number) {
+  await d.query(
+    `UPDATE inventory_items SET quantity = quantity - $2, updated_at = now()
+      WHERE id = $1`,
+    [rowId, round6(qty)],
+  )
+}
+
+/**
+ * Jeden produkční cyklus nad celým světem, v JEDNÉ transakci.
+ * Vrací shrnutí pro log (kolik budov co dělalo).
+ */
+export async function runTick(d: Db, worldId: number) {
+  const buildings = await many<Building>(
+    d,
+    `SELECT b.id::int, b.company_id::int, b.plot_id::int, b.level::int, b.status::text,
+            bt.code AS b_code, bt.is_retail,
+            bt.base_storage::float8 AS storage,
+            bt.base_upkeep_hour::float8 AS upkeep,
+            bt.base_throughput::float8 AS throughput,
+            r.id::int AS recipe_id, r.output_qty::float8 AS output_qty,
+            oi.id::int AS output_item_id, oi.code AS output_code,
+            oi.retail_base::float8 AS retail_base
+       FROM buildings b
+       JOIN building_types bt ON bt.id = b.type_id
+       LEFT JOIN recipes r  ON r.building_type_id = bt.id AND r.is_active
+       LEFT JOIN items oi   ON oi.id = r.output_item_id
+      WHERE b.world_id = $1
+      ORDER BY b.id`,
+    [worldId],
+  )
+  if (buildings.length === 0) return { produced: 0, sold: 0, upkeep: 0 }
+
+  const inputs = await many<Input>(
+    d,
+    `SELECT ri.recipe_id::int, ri.item_id::int, i.code, ri.qty::float8 AS qty,
+            i.base_price::float8 AS base_price
+       FROM recipe_inputs ri JOIN items i ON i.id = ri.item_id`,
+  )
+  const inputsByRecipe = new Map<number, Input[]>()
+  for (const i of inputs) {
+    const arr = inputsByRecipe.get(i.recipe_id) ?? []
+    arr.push(i)
+    inputsByRecipe.set(i.recipe_id, arr)
+  }
+
+  let produced = 0
+  let sold = 0
+  let upkeepPaid = 0
+  const stockCache = new Map<number, InvRow[]>()
+
+  for (const b of buildings) {
+    // dostavěno?
+    if (b.status === 'construction') {
+      const done = await one<{ ok: boolean }>(
+        d,
+        `SELECT completed_at IS NOT NULL AND completed_at <= now() AS ok
+           FROM buildings WHERE id=$1`,
+        [b.id],
+      )
+      if (done?.ok) {
+        await d.query(`UPDATE buildings SET status='idle', last_settled_at=now() WHERE id=$1`, [b.id])
+      }
+      continue
+    }
+
+    const cash = await balance(d, worldId, { type: 'company', id: b.company_id }, 'cash')
+
+    // 1) údržba: bez peněz se neprojede → paused
+    if (b.upkeep > 0) {
+      if (cash < b.upkeep) {
+        await d.query(`UPDATE buildings SET status='paused', last_settled_at=now() WHERE id=$1`, [b.id])
+        continue
+      }
+      await post(d, worldId, [
+        { party: { type: 'company', id: b.company_id }, kind: 'cash', amount: -b.upkeep,
+          moneyFlow: 'sink', refType: 'building', refId: b.id },
+        { party: { type: 'system' }, kind: 'sink_upkeep', amount: b.upkeep,
+          moneyFlow: 'sink', refType: 'building', refId: b.id },
+      ], { kind: 'upkeep' })
+      upkeepPaid++
+    }
+
+    const invId = await plotInventory(d, worldId, b.company_id, b.plot_id)
+
+    // 2) výroba
+    let status = 'idle'
+    if (b.recipe_id !== null && b.output_item_id !== null) {
+      const used = await one<{ q: number }>(
+        d,
+        `SELECT COALESCE(SUM(quantity),0)::float8 AS q FROM inventory_items WHERE inventory_id=$1`,
+        [invId],
+      )
+      const free = Math.max(0, b.storage - (used?.q ?? 0))
+      const need = inputsByRecipe.get(b.recipe_id) ?? []
+
+      if (free <= 0.0001) {
+        status = 'full'
+      } else if (need.length === 0) {
+        // extraktor: bere z ložiska, ne ze skladu
+        const qty = Math.min(b.output_qty, free)
+        await addItems(d, invId, b.output_item_id, qty)
+        produced++
+        status = 'producing'
+      } else {
+        // processor: vstupy napříč sklady firmy (logistika zjednodušená)
+        let stock = stockCache.get(b.company_id)
+        if (!stock) {
+          stock = await companyStock(d, b.company_id)
+          stockCache.set(b.company_id, stock)
+        }
+        const haveOf = (code: string) =>
+          stock!.filter((s) => s.code === code).reduce((s, r) => s + r.avail, 0)
+        const powerNeed = need.find((n) => n.code === 'power')
+        const powerDeficit = powerNeed ? Math.max(0, powerNeed.qty - haveOf('power')) : 0
+        // Regulovaný tarif státní sítě: +15 % proti referenční ceně. Kdyby si hráč
+        // postavil vlastní elektrárnu, prodá mu ji někdo levěji → motivace stavět.
+        const tariff = powerNeed ? round6(powerDeficit * powerNeed.base_price * 1.15) : 0
+        const materialsOk = need
+          .filter((n) => n.code !== 'power')
+          .every((n) => haveOf(n.code) >= n.qty - 1e-9)
+        const cashLeft = cash - (b.upkeep > 0 ? b.upkeep : 0)
+
+        if (!materialsOk) {
+          status = 'starved'          // chybí surovina, ne energie
+        } else if (cashLeft < tariff) {
+          status = 'paused'           // není na elektřinu ze sítě
+        } else {
+          for (const n of need) {
+            let left = n.qty
+            for (const row of stock!.filter((s) => s.code === n.code && s.avail > 0)) {
+              if (left <= 0) break
+              const take = Math.min(left, row.avail)
+              await takeItems(d, row.id, take)
+              row.avail -= take
+              left -= take
+            }
+            if (left > 0.0001 && n.code === 'power') {
+              // chybějící elektřina → státní síť: peníze se spálí, energie vznikne
+              await post(d, worldId, [
+                { party: { type: 'company', id: b.company_id }, kind: 'cash', amount: -tariff,
+                  moneyFlow: 'sink', refType: 'building', refId: b.id },
+                { party: { type: 'system' }, kind: 'sink_utilities', amount: tariff,
+                  moneyFlow: 'sink', refType: 'building', refId: b.id },
+              ], { kind: 'utilities_purchase' })
+            }
+          }
+          const qty = Math.min(b.output_qty, free)
+          await addItems(d, invId, b.output_item_id, qty)
+          produced++
+          status = 'producing'
+        }
+      }
+    }
+
+    // 3) retail: prodejna prodává NPC zákazníkům (faucet peněz do ekonomiky)
+    if (b.is_retail && b.retail_base !== null && b.output_item_id !== null) {
+      const row = await one<{ id: string; avail: number }>(
+        d,
+        `SELECT ii.id::text, (ii.quantity - ii.reserved_qty)::float8 AS avail
+           FROM inventory_items ii
+          WHERE ii.inventory_id=$1 AND ii.item_id=$2 AND ii.quantity - ii.reserved_qty > 0
+          LIMIT 1`,
+        [invId, b.output_item_id],
+      )
+      const sellQty = Math.min(row?.avail ?? 0, Math.max(b.throughput * 0.25, 1))
+      if (row && sellQty > 0) {
+        const gross = round6(sellQty * b.retail_base)
+        await takeItems(d, Number(row.id), sellQty)
+        await post(d, worldId, [
+          { party: { type: 'system' }, kind: 'faucet_retail', amount: -gross,
+            moneyFlow: 'faucet', refType: 'building', refId: b.id },
+          { party: { type: 'company', id: b.company_id }, kind: 'cash', amount: gross,
+            moneyFlow: 'faucet', refType: 'building', refId: b.id },
+        ], { kind: 'retail_sale' })
+        sold++
+        if (status === 'idle') status = 'producing'
+      }
+    }
+
+    await d.query(
+      `UPDATE buildings SET status=$2, last_settled_at=now() WHERE id=$1`,
+      [b.id, status],
+    )
+  }
+
+  return { produced, sold, upkeep: upkeepPaid }
+}
+
+/**
+ * Periodický spouštěč. `getWorldId` čte AKTUÁLNÍ worldId z closure serveru,
+ * protože /api/demo/reset ho za běhu vymění; tx() si bere čerstvou instanci DB
+ * z db.ts singletonu, který reset taky obnoví.
+ */
+export function startTick(getWorldId: () => number) {
+  let running = false
+  const timer = setInterval(() => {
+    if (running) return
+    running = true
+    const worldId = getWorldId()
+    void tx((t) => runTick(t, worldId))
+      .then((s: { produced: number; sold: number; upkeep: number }) => {
+        if (s.produced || s.sold) {
+          console.log(`  ⚙️  tick: výroba ${s.produced}, retail ${s.sold}, údržby ${s.upkeep}`)
+        }
+      })
+      .catch((e) => console.error('  ⚠️  tick selhal:', e instanceof Error ? e.message : e))
+      .finally(() => { running = false })
+  }, TICK_MS)
+  timer.unref?.()
+  return timer
+}

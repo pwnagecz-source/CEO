@@ -49,6 +49,7 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | Seed ekonomiky z `balance-v0.2.json`: 25 položek, 25 budov, 25 receptů, 800 pozemků (40×20), 4 demo firmy, 12 úvodních příkazů | ✅ |
 | **Herní pohled (výchozí):** izometrická mapa světa 40×20 s biomy, budovami, vlastnictvím, zoomem a inspektorem pozemku; HUD s penězi a skladem | ✅ |
 | **Sandbox:** průvodce založením firmy (jméno → odvětví → pozemek → stavba), nákup volných pozemků a stavba budov přímo z mapy — vše přes podvojný ledger | ✅ |
+| **Fáze B:** produkční tick (výroba, údržby, retail, státní síť pro elektřinu), questový řetěz se 7 úkoly, progresivní odemykání Terminálu, „Prodat vše“ jedním klikem | ✅ |
 | Expertní terminál (volitelný, zúžený na obchodování): přehled trhu s hledáním, order book s hloubkou, zadávání příkazů s odhadem exekuce, moje příkazy, páska obchodů, stavová lišta invariantů | ✅ |
 | Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
 
@@ -87,6 +88,7 @@ scripts/dev.mjs         spustí API i web najednou
 | — | [Balance v0.2](docs/generated/balance-v0.2.md) | *generováno* — ceník 25 položek, 25 budov, úrovně, režie, pozemky, makro projekce, ladící knoflíky | 🤖 auto |
 | 99 | [Otevřená rozhodnutí](docs/99-otevrena-rozhodnuti.md) | ADR log — 4 uzamčena, 3 nová z modelových zjištění, 4 otevřená | 🔶 částečně |
 | 30 | `docs/30-matching-engine.md` | CLOB specifikace, pseudokód, race conditions, testy | ⬜ |
+| 40 | [Onboarding, questy a tick](docs/40-onboarding-questy.md) | questový řetěz, progresivní odemykání, produkční tick, státní síť | ✅ hotovo |
 | 40 | `docs/40-tick-engine.md` | výroba, retail simulace, údržba, lazy evaluation | ⬜ |
 | 50 | `docs/50-realtime.md` | SSE/WS, event schéma, coalescing, reconnect | ⬜ |
 | 60 | `docs/60-mvp-sprint-plan.md` | rozpad na 2týdenní sprinty s akceptačními kritérii | ⬜ |

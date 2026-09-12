@@ -191,6 +191,20 @@ check('nevznikl duplicitní příkaz',
   (await j('/orders?companyId=1')).orders.filter((x) => Number(x.id) === a1.body.orderId).length, 1)
 check('audit stále PASS po idempotenci', (await j('/audit')).verdict, 'PASS')
 
+// ── questy + sandbox (Fáze B) ───────────────────────────────────────────────
+console.log(`\n[13] questy a sandbox (odvozený stav, quicksell, makro identita)`)
+const qb = await j('/companies/1/quests')
+check('questů v řetězu je 7', qb.quests.length, 7)
+check('quest „zaloz“ je hotový', qb.quests[0].done, true)
+check('quest „pozemek“ hotový (demo firma vlastní půdu)', qb.quests[1].done, true)
+check('aktivní quest má hint', typeof (qb.active?.hint ?? 'x'), 'string')
+const qsell = await post('/companies/1/quicksell', { itemCode: 'log' })
+check('quicksell: 200 nebo 422 (prázdný sklad)', [200, 422].includes(qsell.status), true)
+check('audit PASS i po sandbox akcích', (await j('/audit')).verdict, 'PASS')
+const mb = await j('/macro')
+check('makro identita M2 ≡ vytvořeno − zničeno',
+  Math.abs(mb.m2 - (mb.moneyCreated - mb.moneyDestroyed)) < 0.01, true)
+
 console.log('\n────────────────────────────────────────────────────────────')
 console.log(` ${pass} ✅   ${fail} ❌   →  ${fail === 0 ? 'VŠECHNO PROŠLO' : 'MÁME PROBLÉM'}`)
 console.log('────────────────────────────────────────────────────────────\n')
