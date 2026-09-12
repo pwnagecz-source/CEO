@@ -78,7 +78,7 @@ běžný sklad (vstupy se berou napříč inventáři firmy — `companyStock`).
   voda), vozy krouží **jednosměrně** (fix „popojíždění tam a zpět“ z fáze D),
   rychlost sleduje herní čas, v pauze stojí. Dekorativní samovolná doprava
   z fáze D **odstraněna** — jezdí jen hráčovy trasy.
-- Seed: Tvá Firma dostane sklad u tahu a dvě ukázkové trasy (tábor→sklad 2×🚚,
+- Seed: první demo firma (Borealis Woods) dostane sklad u tahu a dvě ukázkové trasy (tábor→sklad 2×🚚,
   pila→sklad 1×🚚), aby nový hráč dopravu hned viděl v akci.
 
 ## 7 · Testy

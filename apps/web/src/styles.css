@@ -422,7 +422,7 @@ footer.bottom {
     radial-gradient(900px 500px at 30% 0%, rgba(48, 92, 140, .28), transparent 65%),
     linear-gradient(180deg, #0d1524 0%, #080d16 100%);
 }
-.map-stage { position: relative; width: 100%; height: 100%; min-height: 0; }
+.map-stage { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
 .worldmap-canvas {
   position: absolute; inset: 0; width: 100%; height: 100%;
   display: block; cursor: grab; touch-action: none;
@@ -1038,3 +1038,10 @@ button.ghost.danger:hover { border-color: #f85149; color: #f85149; background: r
   cursor: pointer; font-family: var(--sans); padding: 2px 6px;
 }
 .tut-card__quiet:hover { color: var(--text); text-decoration: underline; }
+
+.map-hint3d {
+  position: absolute; left: 10px; bottom: 10px; z-index: 5;
+  font-size: 11px; color: var(--text-dim);
+  background: rgba(10, 14, 20, .55); padding: 4px 9px; border-radius: 6px;
+  pointer-events: none; backdrop-filter: blur(4px);
+}

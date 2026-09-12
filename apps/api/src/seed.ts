@@ -354,29 +354,22 @@ type DemoCo = {
  * Kotvy jsou zvolené podle rozmístění biomů: les vlevo, důl vpravo, voda dole.
  */
 const HOME_ANCHORS = [
-  { x: Math.round(GRID_W * 0.16), y: Math.round(GRID_H * 0.28) },  // Tvá Firma — les
-  { x: Math.round(GRID_W * 0.16), y: Math.round(GRID_H * 0.60) },  // Borealis — les
+  { x: Math.round(GRID_W * 0.16), y: Math.round(GRID_H * 0.40) },  // Borealis — les
   { x: Math.round(GRID_W * 0.84), y: Math.round(GRID_H * 0.30) },  // Krupp — důl
   { x: Math.round(GRID_W * 0.50), y: GRID_H - 2 },                 // Panetteria — voda
 ]
 
 const DEMO_COMPANIES: DemoCo[] = [
   {
-    name: 'Tvá Firma', industry: 'timber', cash: 25_000,
-    buildings: [
-      { code: 'solar_plant', plotType: 'utility', level: 1 },
-      { code: 'logging_camp', plotType: 'forest', level: 1 },
-      { code: 'sawmill', plotType: 'industrial', level: 1 },
-    ],
-    inventory: { log: 1200, planks: 340, power: 9000 },
-  },
-  {
-    name: 'Borealis Woods', industry: 'timber', cash: 40_000,
+    // formerly „Tvá Firma" — seed už nezakládá figurantovou hráčskou firmu;
+    // Borealis jako největší dřevařský podnik převzal i solárnu (likvidita power)
+    name: 'Borealis Woods', industry: 'timber', cash: 45_000,
     buildings: [
       { code: 'logging_camp', plotType: 'forest', level: 2 },
       { code: 'sawmill', plotType: 'industrial', level: 1 },
+      { code: 'solar_plant', plotType: 'utility', level: 1 },
     ],
-    inventory: { log: 3000, planks: 900 },
+    inventory: { log: 3000, planks: 900, power: 9000 },
   },
   {
     name: 'Krupp Metall', industry: 'metallurgy', cash: 60_000,
@@ -508,7 +501,7 @@ async function seedDemoCompanies(
   // počáteční likvidita v order booku, aby nový hráč mohl okamžitě obchodovat
   await placeSeedOrders(d, worldId, itemId, companyIds)
 
-  // Ukázkový logistický okruh Tvé Firmy: sklad u tahu + dvě trasy do něj.
+  // Ukázkový logistický okruh první demo firmy: sklad u tahu + dvě trasy do něj.
   // Bez skladu by se tábor i pila ucpaly v malých dvorcích (status `full`)
   // a nový hráč by místo jezdících náklaďáků viděl mrtvý svět.
   const demoCo = companyIds[0]
@@ -573,18 +566,19 @@ async function placeSeedOrders(
 ) {
   type Q = { item: string; side: 'buy' | 'sell'; price: number; qty: number; co: number }
   const quotes: Q[] = [
-    { item: 'log', side: 'sell', price: 0.1150, qty: 500, co: 1 },
-    { item: 'log', side: 'sell', price: 0.1200, qty: 800, co: 1 },
+    // indexy `co` míří na DEMO_COMPANIES: 0 dřevo, 1 metallurgie, 2 food
+    { item: 'log', side: 'sell', price: 0.1150, qty: 500, co: 0 },
+    { item: 'log', side: 'sell', price: 0.1200, qty: 800, co: 0 },
     { item: 'log', side: 'buy', price: 0.1000, qty: 400, co: 0 },
-    { item: 'planks', side: 'sell', price: 0.3100, qty: 300, co: 1 },
-    { item: 'planks', side: 'sell', price: 0.3250, qty: 450, co: 1 },
+    { item: 'planks', side: 'sell', price: 0.3100, qty: 300, co: 0 },
+    { item: 'planks', side: 'sell', price: 0.3250, qty: 450, co: 0 },
     { item: 'planks', side: 'buy', price: 0.2900, qty: 250, co: 0 },
-    { item: 'iron_ore', side: 'sell', price: 0.2500, qty: 400, co: 2 },
-    { item: 'iron_ingot', side: 'sell', price: 1.5200, qty: 120, co: 2 },
-    { item: 'iron_ingot', side: 'buy', price: 1.3800, qty: 80, co: 2 },
-    { item: 'bread', side: 'sell', price: 0.0990, qty: 1500, co: 3 },
+    { item: 'iron_ore', side: 'sell', price: 0.2500, qty: 400, co: 1 },
+    { item: 'iron_ingot', side: 'sell', price: 1.5200, qty: 120, co: 1 },
+    { item: 'iron_ingot', side: 'buy', price: 1.3800, qty: 80, co: 1 },
+    { item: 'bread', side: 'sell', price: 0.0990, qty: 1500, co: 2 },
     { item: 'power', side: 'sell', price: 0.0520, qty: 5000, co: 0 },
-    { item: 'power', side: 'buy', price: 0.0480, qty: 3000, co: 2 },
+    { item: 'power', side: 'buy', price: 0.0480, qty: 3000, co: 1 },
   ]
   for (const q of quotes) {
     const companyId = companyIds[q.co]
