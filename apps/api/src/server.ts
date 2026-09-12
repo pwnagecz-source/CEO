@@ -7,7 +7,8 @@
  */
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
-import { closeDb, getDb, many, one, tx } from './db.ts'
+import type { ServerResponse } from 'node:http'
+import { closeDb, getDb, many, one, tx, type Db } from './db.ts'
 import { audit, balance, macroSnapshot } from './ledger.ts'
 import { createRoute, deleteRoute, listRoutes, quoteRoute } from './transport.ts'
 import {
@@ -35,6 +36,64 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 function statusForMarketError(e: MarketError): number {
   return e.code === 'unknown_item' || e.code === 'not_found' ? 404 : 422
+}
+
+/** Kompletní snímek mapy (sdílí /api/map a delta stream). */
+async function mapSnapshot(db: Db, worldId: number) {
+  const grid = await one<{ w: number; h: number }>(
+    db,
+    `SELECT plot_grid_w::int AS w, plot_grid_h::int AS h FROM worlds WHERE id=$1`,
+    [worldId],
+  )
+  const plots = await many<{
+    id: string; x: number; y: number; type: string; status: string
+    owner_id: string | null; owner_name: string | null
+    b_id: string | null; b_code: string | null; b_name: string | null
+    b_level: number | null; b_status: string | null; b_retail: boolean | null
+    b_output: string | null; b_industry: string | null; b_tier: number | null
+    richness: number; assessed_value: number
+  }>(
+    db,
+    `SELECT p.id::text, p.x::int, p.y::int, p.plot_type::text AS type, p.status::text,
+            p.owner_company_id::text AS owner_id, c.name AS owner_name,
+            b.id::text AS b_id, bt.code AS b_code, bt.name AS b_name,
+            b.level::int AS b_level, b.status::text AS b_status,
+            bt.is_retail AS b_retail, oi.code AS b_output,
+            ind.code AS b_industry, oi.tier::int AS b_tier,
+            p.deposit_richness::float8 AS richness,
+            p.assessed_value::float8 AS assessed_value
+       FROM plots p
+       LEFT JOIN companies c        ON c.id = p.owner_company_id
+       LEFT JOIN buildings b        ON b.plot_id = p.id
+       LEFT JOIN building_types bt  ON bt.id = b.type_id
+       LEFT JOIN industries ind     ON ind.id = bt.industry_id
+       LEFT JOIN recipes r          ON r.building_type_id = bt.id
+       LEFT JOIN items oi           ON oi.id = r.output_item_id
+      WHERE p.world_id = $1
+      ORDER BY p.y, p.x`,
+    [worldId],
+  )
+  // napojení na silniční síť: UI podle toho kreslí dopravu a hlásí „bez cesty“
+  const net = await roadNetwork(db, worldId)
+  return {
+    grid: { w: grid?.w ?? 64, h: grid?.h ?? 32 },
+    plots: plots.map((p) => ({ ...p, connected: isPlotConnected(net, p.x, p.y) })),
+  }
+}
+
+/** Stav herních hodin (sdílí /api/clock a delta stream). */
+async function clockState(db: Db, worldId: number) {
+  const w = await one<{ speed: number; hours: string }>(
+    db,
+    `SELECT sim_speed::int AS speed, sim_hours::text AS hours
+       FROM worlds WHERE id=$1`,
+    [worldId],
+  )
+  const hours = Number(w?.hours ?? 0)
+  return {
+    speed: w?.speed ?? 1, hours,
+    day: Math.floor(hours / 24) + 1, hour: Math.floor(hours % 24),
+  }
 }
 
 async function boot() {
@@ -88,47 +147,7 @@ async function boot() {
    * pohled „shora na svět“ — mapa potřebuje i cizí a volné dlaždice, jinak by
    * hráč neviděl, kde může stavět a kde už někdo je.
    */
-  app.get('/api/map', async () => {
-    const grid = await one<{ w: number; h: number }>(
-      db,
-      `SELECT plot_grid_w::int AS w, plot_grid_h::int AS h FROM worlds WHERE id=$1`,
-      [worldId],
-    )
-    const plots = await many<{
-      id: string; x: number; y: number; type: string; status: string
-      owner_id: string | null; owner_name: string | null
-      b_id: string | null; b_code: string | null; b_name: string | null
-      b_level: number | null; b_status: string | null; b_retail: boolean | null
-      b_output: string | null; b_industry: string | null; b_tier: number | null
-      richness: number; assessed_value: number
-    }>(
-      db,
-      `SELECT p.id::text, p.x::int, p.y::int, p.plot_type::text AS type, p.status::text,
-              p.owner_company_id::text AS owner_id, c.name AS owner_name,
-              b.id::text AS b_id, bt.code AS b_code, bt.name AS b_name,
-              b.level::int AS b_level, b.status::text AS b_status,
-              bt.is_retail AS b_retail, oi.code AS b_output,
-              ind.code AS b_industry, oi.tier::int AS b_tier,
-              p.deposit_richness::float8 AS richness,
-              p.assessed_value::float8 AS assessed_value
-         FROM plots p
-         LEFT JOIN companies c        ON c.id = p.owner_company_id
-         LEFT JOIN buildings b        ON b.plot_id = p.id
-         LEFT JOIN building_types bt  ON bt.id = b.type_id
-         LEFT JOIN industries ind     ON ind.id = bt.industry_id
-         LEFT JOIN recipes r          ON r.building_type_id = bt.id
-         LEFT JOIN items oi           ON oi.id = r.output_item_id
-        WHERE p.world_id = $1
-        ORDER BY p.y, p.x`,
-      [worldId],
-    )
-    // napojení na silniční síť: UI podle toho kreslí auta a hlásí „bez cesty“
-    const net = await roadNetwork(db, worldId)
-    return {
-      grid: { w: grid?.w ?? 64, h: grid?.h ?? 32 },
-      plots: plots.map((p) => ({ ...p, connected: isPlotConnected(net, p.x, p.y) })),
-    }
-  })
+  app.get('/api/map', async () => mapSnapshot(db, worldId))
 
   // ----------------------------------------------------------------- codex ---
   /**
@@ -166,19 +185,72 @@ async function boot() {
 
   // ----------------------------------------------------------------- clock ---
   /** Herní hodiny: viditelný čas + rychlost (0 = pauza, 1/2/4). */
-  app.get('/api/clock', async () => {
-    const w = await one<{ speed: number; hours: string }>(
-      db,
-      `SELECT sim_speed::int AS speed, sim_hours::text AS hours
-         FROM worlds WHERE id=$1`,
-      [worldId],
-    )
-    const hours = Number(w?.hours ?? 0)
-    return {
-      speed: w?.speed ?? 1, hours,
-      day: Math.floor(hours / 24) + 1, hour: Math.floor(hours % 24),
+  app.get('/api/clock', async () => clockState(db, worldId))
+
+  // ---------------------------------------------------------------- stream ---
+  /**
+   * Delta protokol (SSE). Klient si nestahuje každé 2,5 s celou mapu
+   * (2 048 pozemků ≈ 400 kB JSONu) — drží trvalé spojení a server mu jednou
+   * za sekundu pošle JEN pozemky, které se proti předchozímu snímku změnily,
+   * plus hodiny, když se pohnuly. Nový klient dostane okamžitě kompletní
+   * `init`; po /api/demo/reset (změna worldId) přijde `init` znovu všem.
+   */
+  const sseClients = new Set<ServerResponse>()
+  let sseCache: {
+    worldId: number; sig: Map<string, string>; clock: string
+    snap: Awaited<ReturnType<typeof mapSnapshot>>
+  } | null = null
+
+  const sseSend = (res: ServerResponse, event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  }
+  const sseBroadcast = (event: string, data: unknown) => {
+    for (const res of sseClients) sseSend(res, event, data)
+  }
+
+  app.get('/api/stream', (req, reply) => {
+    reply.hijack()
+    const res = reply.raw
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    res.write('retry: 2000\n\n')
+    sseClients.add(res)
+    // čerstvý klient: okamžitý kompletní snímek z mezipaměti (nebo do sekundy)
+    if (sseCache && sseCache.worldId === worldId) {
+      sseSend(res, 'init', sseCache.snap)
+      sseSend(res, 'clock', JSON.parse(sseCache.clock))
     }
+    req.raw.on('close', () => { sseClients.delete(res) })
   })
+
+  const sseTimer = setInterval(() => {
+    if (sseClients.size === 0) return
+    void (async () => {
+      try {
+        const snap = await mapSnapshot(db, worldId)
+        const clk = await clockState(db, worldId)
+        const sig = new Map<string, string>()
+        for (const p of snap.plots) sig.set(p.id, JSON.stringify(p))
+        const clockJson = JSON.stringify(clk)
+        if (!sseCache || sseCache.worldId !== worldId) {
+          sseBroadcast('init', snap)
+        } else {
+          const prev = sseCache.sig
+          const changed = snap.plots.filter((p) => prev.get(p.id) !== sig.get(p.id))
+          if (changed.length > 0) sseBroadcast('plots', changed)
+        }
+        if (!sseCache || sseCache.clock !== clockJson) sseBroadcast('clock', clk)
+        sseCache = { worldId, sig, snap, clock: clockJson }
+      } catch {
+        // během /api/demo/reset je DB chvíli nedostupná — příští kolo to spraví
+      }
+    })()
+  }, 1000)
+  sseTimer.unref?.()
   app.post<{ Body: { speed: number } }>('/api/clock', async (req, reply) => {
     const sp = Number(req.body?.speed)
     if (![0, 1, 2, 4].includes(sp)) {

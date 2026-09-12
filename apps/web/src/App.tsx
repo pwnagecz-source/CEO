@@ -74,9 +74,9 @@ export default function App() {
     if (inFlight.current) return
     inFlight.current = true
     try {
-      const [h, m, a, it, cos, tr, mp, cat, ck, cx] = await Promise.all([
+      const [h, m, a, it, cos, tr, cat, ck, cx] = await Promise.all([
         api.health(), api.macro(), api.audit(), api.items(), api.companies(), api.trades(),
-        api.map(), api.catalog(), api.clock(), api.codex(),
+        api.catalog(), api.clock(), api.codex(),
       ])
       setHealth({
         worldId: h.worldId, engine: h.engine, version: h.version,
@@ -88,7 +88,6 @@ export default function App() {
       setFees(it.fees)
       setCompanies(cos.companies)
       setTrades(tr.trades)
-      setMap(mp)
       setCatalog(cat.buildings)
       setClock(ck)
       setCodex(cx)
@@ -131,6 +130,52 @@ export default function App() {
     return () => clearInterval(t)
   }, [refresh])
 
+  /** Celá mapa najednou — při startu, po resetu světa a jako pojistka. */
+  async function refreshMap() {
+    try { setMap(await api.map()) } catch { /* SSE/poll to spraví */ }
+  }
+
+  /**
+   * Delta protokol (SSE): server posílá jen pozemky, které se změnily,
+   * a hodiny. Celá mapa se stahuje jen na začátku, po `init` (nový/reset
+   * světa) a každých 30 s jako pojistka proti ztraceným událostem.
+   */
+  useEffect(() => {
+    void refreshMap()
+    const safety = setInterval(() => void refreshMap(), 30_000)
+    if (typeof EventSource === 'undefined') return () => clearInterval(safety)
+    const es = new EventSource('/api/stream')
+    const applyInit = (data: string) => {
+      try {
+        const m = JSON.parse(data) as MapData
+        setMap(m)
+        setSelectedPlot((prev) => (prev ? m.plots.find((x) => x.id === prev.id) ?? null : prev))
+      } catch { /* neplatný payload ignorujeme */ }
+    }
+    const applyPlots = (data: string) => {
+      try {
+        const changed = JSON.parse(data) as MapPlot[]
+        const idx = new Map(changed.map((c) => [c.id, c]))
+        setMap((prev) => (prev
+          ? { ...prev, plots: prev.plots.map((p) => idx.get(p.id) ?? p) }
+          : prev))
+        setSelectedPlot((prev) => (prev ? idx.get(prev.id) ?? prev : prev))
+      } catch { /* neplatný payload ignorujeme */ }
+    }
+    const onInit = (e: Event) => applyInit((e as MessageEvent).data as string)
+    const onPlots = (e: Event) => applyPlots((e as MessageEvent).data as string)
+    const onClock = (e: Event) => {
+      try { setClock(JSON.parse((e as MessageEvent).data as string) as Clock) }
+      catch { /* ignore */ }
+    }
+    es.addEventListener('init', onInit)
+    es.addEventListener('plots', onPlots)
+    es.addEventListener('clock', onClock)
+    // onerror netřeba řešit: EventSource se reconnectuje sám a server po
+    // znovu-připojení pošle čerstvý init.
+    return () => { es.close(); clearInterval(safety) }
+  }, [])
+
   /** Přepne položku okamžitě, bez čekání na další poll. */
   async function selectItem(code: string) {
     setItemCode(code)
@@ -153,7 +198,7 @@ export default function App() {
     setActBusy(label); setActErr(null)
     try {
       await fn()
-      await refresh()
+      await Promise.all([refresh(), refreshMap()])
     } catch (e) {
       setActErr(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : String(e)))
     } finally {
@@ -278,7 +323,7 @@ export default function App() {
     try {
       await api.reset()
       setSelectedPlot(null)
-      await refresh()
+      await Promise.all([refresh(), refreshMap()])
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     } finally {

@@ -51,9 +51,11 @@ matching enginem a ledgerem, ne jen HTTP 200.
 | **Sandbox:** průvodce založením firmy (jméno → odvětví → pozemek → stavba), nákup volných pozemků a stavba budov přímo z mapy — vše přes podvojný ledger | ✅ |
 | **Fáze B:** produkční tick (výroba, údržby, retail, státní síť pro elektřinu), questový řetěz se 7 úkoly, progresivní odemykání Terminálu, „Prodat vše“ jedním klikem | ✅ |
 | **Fáze D:** logistika — státní silniční síť, napojení produkce (BFS), najatí stavebníci s výkupem tras, sklady, řeky jako vodní cesty + přístavy a lodě, herní čas s pauzou/zrychlením, Kniha (kodex receptů a příručka) a viewport culling mapy | ✅ |
+| **Výkon:** mapa kreslená Canvas 2D (terén v offscreen vrstvě, překres jen při změně obsahu; budovy/doprava per-frame s cullingem, kamera mimo React) + SSE delta protokol `/api/stream` (server posílá jen změněné pozemky a hodiny, celá mapa jen při startu/resetu) | ✅ |
 | **Cargo simulace:** hráčem zakládané dopravní trasy (odkud → kam, 🚚/🚢, 1–8 vozidel), tick po nich vozí zboží mezi dvorci budov a účtuje přepravné za svezené jednotky; na mapě jezdí náklaďáky a lodě JEN po založených trasách (jednosměrný okruh), trasy jsou vykreslené čárkovaně | ✅ |
 | Expertní terminál (volitelný, zúžený na obchodování): přehled trhu s hledáním, order book s hloubkou, zadávání příkazů s odhadem exekuce, moje příkazy, páska obchodů, stavová lišta invariantů | ✅ |
-| Tick engine (výroba, údržba, retail), auth, WebSocket delta protokol, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — polling a demo firmy bez přihlášení |
+| Tick engine (výroba, údržba, retail), auth, sezóny, Redis/BullMQ, Drizzle | ⬜ zatím ne — demo firmy bez přihlášení |
+| Real-time: SSE delta protokol pro mapu a hodiny | ✅ · obousměrné WebSocket pro akce ⬜ |
 
 ### Struktura
 
@@ -68,7 +70,7 @@ apps/web/src/
   api.ts       typovaný klient (relativní cesty → Vite proxy)
   estimate.ts  odhad exekuce proti booku (stejná logika jako engine)
   game/        izometrická projekce (iso.ts) a art direction (art.ts)
-  components/  SetupScreen (průvodce), GameView + WorldMap + TrafficLayer (cargo),
+  components/  SetupScreen (průvodce), GameView + WorldMap (Canvas 2D, cargo doprava),
                QuestRail, CodexView (kniha), TerminalView, BookPanel, TradeTape,
                Header, Footer (expertní terminál)
   logistics.ts silniční síť, BFS napojení, najatí stavebníci, výkup tras
@@ -95,6 +97,7 @@ scripts/dev.mjs         spustí API i web najednou
 | 40 | [Onboarding, questy a tick](docs/40-onboarding-questy.md) | questový řetěz, progresivní odemykání, produkční tick, státní síť | ✅ hotovo |
 | 50 | [Logistika, silnice a čas](docs/50-logistika-silnice-cas.md) | silniční síť, napojení produkce, stavební firmy, sklady, lodě a vodní cesty, herní čas, kodex | ✅ hotovo |
 | 51 | [Cargo simulace](docs/51-cargo-doprava.md) | hráčské trasy, vozový park, přepravné, per-plot dvorce, doprava na mapě | ✅ hotovo |
+| 52 | [Výkon: Canvas 2D a delta protokol](docs/52-vykon-canvas-delta.md) | renderer mapy, offscreen vrstvy, SSE diff, pojistný poll | ✅ hotovo |
 | 40 | `docs/40-tick-engine.md` | výroba, retail simulace, údržba, lazy evaluation | ⬜ |
 | 50 | `docs/50-realtime.md` | SSE/WS, event schéma, coalescing, reconnect | ⬜ |
 | 60 | `docs/60-mvp-sprint-plan.md` | rozpad na 2týdenní sprinty s akceptačními kritérii | ⬜ |

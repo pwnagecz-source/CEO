@@ -269,6 +269,48 @@ const mbr = await j('/macro')
 check('M2 identita drží i po setup poplatcích',
   Math.abs(mbr.m2 - (mbr.moneyCreated - mbr.moneyDestroyed)) < 0.01, true)
 
+// ── Delta protokol: SSE stream ───────────────────────────────────────────────
+console.log(`\n[16] delta protokol (SSE) — jen změněné pozemky místo celé mapy`)
+{
+  const ac = new AbortController()
+  const killer = setTimeout(() => ac.abort(), 9000)
+  try {
+    const sr = await fetch(BASE + '/stream', {
+      signal: ac.signal, headers: { Accept: 'text/event-stream' },
+    })
+    check('SSE: 200 + text/event-stream',
+      sr.status === 200 && (sr.headers.get('content-type') ?? '').includes('text/event-stream'), true)
+    const reader = sr.body.getReader()
+    const dec = new TextDecoder()
+    const readUntil = async (needle, ms) => {
+      let buf = ''
+      const t0 = Date.now()
+      while (!buf.includes(needle) && Date.now() - t0 < ms) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+      }
+      return buf
+    }
+    const first = await readUntil('event: init', 4000)
+    check('SSE: nový klient dostane init s celou mapou',
+      first.includes('event: init') && first.includes('"plots"'), true)
+    await post('/clock', { speed: 4 })
+    // v bufferu může čekat starší clock event z ticku (speed 1) — proto jehla
+    // hledá rovnou rychlost 4, ne jen jméno události
+    const chg = await readUntil('"speed":4', 5000)
+    check('SSE: změna hodin přijde jako delta event',
+      chg.includes('event: clock') && chg.includes('"speed":4'), true)
+    await post('/clock', { speed: 1 })
+  } catch (e) {
+    if (e?.name !== 'AbortError') throw e
+  } finally {
+    clearTimeout(killer)
+    ac.abort()
+  }
+}
+check('audit PASS po SSE sekci', (await j('/audit')).verdict, 'PASS')
+
 console.log('\n────────────────────────────────────────────────────────────')
 console.log(` ${pass} ✅   ${fail} ❌   →  ${fail === 0 ? 'VŠECHNO PROŠLO' : 'MÁME PROBLÉM'}`)
 console.log('────────────────────────────────────────────────────────────\n')
