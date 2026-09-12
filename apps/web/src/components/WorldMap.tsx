@@ -19,9 +19,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MapData, MapPlot, TransportRoute } from '../api'
 import {
-  FLOOR_H, TILE_H, TILE_W, diamondPoints, gridBounds, ownerColor, tileCenter, up, type Pt,
+  FLOOR_H, TILE_H, TILE_W, gridBounds, ownerColor, tileCenter, type Pt,
 } from '../game/iso'
 import { STATUS_GLOW, shade, skinFor, terrainFor } from '../game/art'
+import { drawBuildingArt, drawConstructionArt } from '../game/buildingArt'
 
 type Props = {
   map: MapData | null
@@ -42,8 +43,6 @@ function hash2(x: number, y: number, salt = 0): number {
   h = (h ^ (h >> 13)) * 1274126177 >>> 0
   return ((h ^ (h >> 16)) >>> 0) / 4294967295
 }
-
-const lerp = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
 
 /* ── canvas pomůcky ─────────────────────────────────────────────────────── */
 
@@ -154,7 +153,16 @@ function drawTerrainDetail(ctx: CanvasRenderingContext2D, plot: MapPlot, c: Pt) 
   }
 }
 
-function drawTileBase(ctx: CanvasRenderingContext2D, plot: MapPlot, myCompanyId: string | null) {
+/**
+ * Silniční dlaždice: asfalt se štěrkovou bankou a středovým značením, které
+ * respektuje křižovatky. `roadSet` obsahuje "x,y" všech silničních dlaždic —
+ * hrana bez sousední silnice dostane štěrk, osa se čáruje jen tam, kudy se
+ * skutečně jezdí (NE-SW nebo NW-SE), křižovatka zůstává bez čar.
+ */
+function drawTileBase(
+  ctx: CanvasRenderingContext2D, plot: MapPlot, myCompanyId: string | null,
+  roadSet: Set<string>,
+) {
   const c = tileCenter(plot.x, plot.y)
   const owned = plot.owner_id !== null
   // Hráčská silnice (budova road) je plochý asfalt, ne hranol — terén pod ní
@@ -164,30 +172,60 @@ function drawTileBase(ctx: CanvasRenderingContext2D, plot: MapPlot, myCompanyId:
     ? terrainFor('road', owned)
     : terrainFor(plot.type, owned)
 
-  fillPoly(ctx, diamondPts(c.x, c.y), shade(terr.fill, 0.94 + hash2(plot.x, plot.y, 31) * 0.12))
-  strokePoly(ctx, diamondPts(c.x, c.y, TILE_W - 6, TILE_H - 3), '#ffffff', 0.6, 0.055)
-  // nasvícená horní hrana
-  ctx.beginPath()
-  ctx.moveTo(c.x - TILE_W / 2, c.y)
-  ctx.lineTo(c.x, c.y - TILE_H / 2)
-  ctx.lineTo(c.x + TILE_W / 2, c.y)
-  ctx.strokeStyle = terr.edge
-  ctx.lineWidth = 1
-  ctx.stroke()
-
   if (isRoad) {
-    // středové značení
-    ctx.beginPath()
-    ctx.moveTo(c.x - 10, c.y + 5)
-    ctx.lineTo(c.x + 10, c.y - 5)
+    const g = diamondPts(c.x, c.y)   // [top, right, bottom, left]
+    // asfalt s jemným šumem
+    fillPoly(ctx, g, shade('#2b2e34', 0.96 + hash2(plot.x, plot.y, 31) * 0.08))
+    for (let i = 0; i < 7; i++) {
+      const sx = c.x + (hash2(plot.x, plot.y, 70 + i) - 0.5) * (TILE_W - 12)
+      const sy = c.y + (hash2(plot.x, plot.y, 90 + i) - 0.5) * (TILE_H - 8)
+      ctx.globalAlpha = 0.1 + hash2(plot.x, plot.y, 110 + i) * 0.12
+      ctx.fillStyle = i % 2 ? '#4a4e56' : '#1b1e23'
+      ctx.fillRect(sx, sy, 1.4, 1)
+    }
+    ctx.globalAlpha = 1
+    // štěrková banka jen na hranách BEZ napojení
+    const nNE = roadSet.has(`${plot.x + 1},${plot.y - 1}`)
+    const nSE = roadSet.has(`${plot.x + 1},${plot.y}`)
+    const nSW = roadSet.has(`${plot.x},${plot.y + 1}`)
+    const nNW = roadSet.has(`${plot.x - 1},${plot.y}`)
+    const edges: [Pt, Pt, boolean][] = [
+      [g[0], g[1], nNE], [g[1], g[2], nSE], [g[2], g[3], nSW], [g[3], g[0], nNW],
+    ]
+    for (const [a, b, hasN] of edges) {
+      if (hasN) continue
+      plineEdge(ctx, a, b, '#6b6157', 2.2, 0.9)
+      plineEdge(ctx, lerpPt(a, b, 0.06), lerpPt(b, a, 0.06), '#3a3d43', 1, 0.7)
+    }
+    // středové značení podle osy průjezdu
+    const axisA = nNE || nSW    // NE–SW
+    const axisB = nNW || nSE    // NW–SE
     ctx.strokeStyle = '#c9cdd4'
-    ctx.globalAlpha = 0.28
+    ctx.globalAlpha = 0.3
     ctx.lineWidth = 1.2
     ctx.setLineDash([4, 4])
+    ctx.beginPath()
+    if (axisA && !axisB) {
+      ctx.moveTo((g[2].x + g[3].x) / 2, (g[2].y + g[3].y) / 2)
+      ctx.lineTo((g[0].x + g[1].x) / 2, (g[0].y + g[1].y) / 2)
+    } else if (axisB && !axisA) {
+      ctx.moveTo((g[3].x + g[0].x) / 2, (g[3].y + g[0].y) / 2)
+      ctx.lineTo((g[1].x + g[2].x) / 2, (g[1].y + g[2].y) / 2)
+    }
     ctx.stroke()
     ctx.setLineDash([])
     ctx.globalAlpha = 1
   } else {
+    fillPoly(ctx, diamondPts(c.x, c.y), shade(terr.fill, 0.94 + hash2(plot.x, plot.y, 31) * 0.12))
+    strokePoly(ctx, diamondPts(c.x, c.y, TILE_W - 6, TILE_H - 3), '#ffffff', 0.6, 0.055)
+    // nasvícená horní hrana
+    ctx.beginPath()
+    ctx.moveTo(c.x - TILE_W / 2, c.y)
+    ctx.lineTo(c.x, c.y - TILE_H / 2)
+    ctx.lineTo(c.x + TILE_W / 2, c.y)
+    ctx.strokeStyle = terr.edge
+    ctx.lineWidth = 1
+    ctx.stroke()
     drawTerrainDetail(ctx, plot, c)
   }
 
@@ -198,76 +236,50 @@ function drawTileBase(ctx: CanvasRenderingContext2D, plot: MapPlot, myCompanyId:
   }
 }
 
+function plineEdge(ctx: CanvasRenderingContext2D, a: Pt, b: Pt, color: string, w: number, alpha: number) {
+  ctx.globalAlpha = alpha
+  ctx.beginPath()
+  ctx.moveTo(a.x, a.y)
+  ctx.lineTo(b.x, b.y)
+  ctx.strokeStyle = color
+  ctx.lineWidth = w
+  ctx.stroke()
+  ctx.globalAlpha = 1
+}
+
+const lerpPt = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
+
 /* ── budovy (animované → kreslí se každý snímek) ────────────────────────── */
 
-const CHIMNEY = new Set(['metallurgy', 'energy', 'mining', 'construction', 'manufacturing'])
-
-function drawBuilding(ctx: CanvasRenderingContext2D, plot: MapPlot, c: Pt, now: number) {
+/**
+ * Stín + varianta budovy z buildingArt + stavová kontrolka a úrovně.
+ * `night` (0..1) rozsvěcuje okna a neony — stejná křivka jako tint oblohy.
+ */
+function drawBuilding(
+  ctx: CanvasRenderingContext2D, plot: MapPlot, c: Pt, now: number, night: number,
+) {
   // silnice jako budova už je vyřešená v terénní vrstvě
   if (plot.b_code === 'road') return
 
   const skin = skinFor(plot.b_industry, plot.b_retail)
-  const tier = plot.b_tier ?? 1
   const level = plot.b_level ?? 1
-  const hgt = Math.min(68, 18 + tier * 8 + (level - 1) * FLOOR_H * 0.6)
-  const inset = 6
-  const g = diamondPoints(c.x, c.y, TILE_W - inset * 2, TILE_H - inset)
-  const glow = plot.b_status ? STATUS_GLOW[plot.b_status] : undefined
   const producing = plot.b_status === 'producing'
+  const glow = plot.b_status ? STATUS_GLOW[plot.b_status] : undefined
 
   // vržený stín
-  fillPoly(ctx, diamondPts(c.x + 3, c.y + 3, TILE_W - inset, TILE_H - inset * 0.6), '#000', 0.24)
-  // stěny + střecha
-  fillPoly(ctx, [g.left, g.bottom, up(g.bottom, hgt), up(g.left, hgt)], skin.wallDark)
-  fillPoly(ctx, [g.bottom, g.right, up(g.right, hgt), up(g.bottom, hgt)], skin.wall)
-  const roof = [up(g.top, hgt), up(g.right, hgt), up(g.bottom, hgt), up(g.left, hgt)]
-  fillPoly(ctx, roof, skin.roof)
-  strokePoly(ctx, roof, '#00000040', 0.6)
+  fillPoly(ctx, diamondPts(c.x + 3, c.y + 3, TILE_W - 14, TILE_H - 8), '#000', 0.24)
 
-  // okna jako pásy na pravé (nasvícené) stěně
-  const winCount = Math.min(3, level)
-  for (let i = 0; i < winCount; i++) {
-    const y0 = hgt - 5 - i * 7
-    if (y0 < 4) break
-    fillPoly(ctx, [
-      up(lerp(g.bottom, g.right, 0.2), y0),
-      up(lerp(g.bottom, g.right, 0.8), y0),
-      up(lerp(g.bottom, g.right, 0.8), y0 + 3),
-      up(lerp(g.bottom, g.right, 0.2), y0 + 3),
-    ], producing ? '#ffe9a8' : '#232a35', 0.92)
-  }
-
-  // retail markýza
-  if (plot.b_retail) {
-    fillPoly(ctx, [
-      up(g.bottom, hgt * 0.55), up(g.right, hgt * 0.55),
-      up(g.right, hgt * 0.55 + 5), up(g.bottom, hgt * 0.55 + 5),
-    ], '#eee7d8')
-    fillPoly(ctx, [
-      up(g.bottom, hgt * 0.55), up(g.right, hgt * 0.55),
-      up(g.right, hgt * 0.55 + 2.4), up(g.bottom, hgt * 0.55 + 2.4),
-    ], '#c0453c')
-  }
-
-  // komín + kouř
-  if (plot.b_industry && CHIMNEY.has(plot.b_industry)) {
-    ctx.fillStyle = skin.wallDark
-    ctx.fillRect(c.x - 2, c.y - hgt - 9, 4, 10)
-    if (producing) {
-      for (let i = 0; i < 3; i++) {
-        const prog = ((now / 2200) + i / 3 + hash2(plot.x, plot.y, 7)) % 1
-        const r = 1.8 + prog * 2.6
-        ctx.globalAlpha = 0.5 * (1 - prog)
-        ctx.fillStyle = '#c9cdd4'
-        ctx.beginPath()
-        ctx.arc(c.x - 1 + prog * 5 + i, c.y - hgt - 12 - prog * 16, r, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.globalAlpha = 1
-      }
-    }
+  if (plot.b_status === 'construction') {
+    drawConstructionArt(ctx, c, now)
+  } else {
+    drawBuildingArt({
+      ctx, c, now, level, producing, night, skin,
+      seed: hash2(plot.x, plot.y, 17),
+    }, plot.b_code)
   }
 
   // stavová kontrolka (producing pulzuje)
+  const hgt = Math.min(68, 18 + (plot.b_tier ?? 1) * 8 + (level - 1) * FLOOR_H * 0.6)
   if (glow) {
     const r = 2.4 + (producing ? Math.sin(now / 300) * 0.9 : 0)
     ctx.fillStyle = glow
@@ -290,9 +302,16 @@ function drawBuilding(ctx: CanvasRenderingContext2D, plot: MapPlot, c: Pt, now: 
 
 /* ── doprava: jezdí jen po hráčem založených trasách ────────────────────── */
 
-type Lane = { pts: Pt[]; cum: number[]; len: number; kind: 'truck' | 'ship'; vehicles: number }
+const CARGO_COLORS = ['#c0453c', '#4f83d8', '#3ddc97', '#ffc266', '#b06459', '#8b7bff']
 
-function laneFrom(path: { x: number; y: number }[], kind: 'truck' | 'ship', vehicles: number): Lane | null {
+type Lane = {
+  pts: Pt[]; cum: number[]; len: number; kind: 'truck' | 'ship'
+  vehicles: number; color: string
+}
+
+function laneFrom(
+  path: { x: number; y: number }[], kind: 'truck' | 'ship', vehicles: number, color: string,
+): Lane | null {
   const pts = path.map((t) => tileCenter(t.x, t.y))
   if (pts.length < 2) return null
   const cum = [0]
@@ -302,7 +321,7 @@ function laneFrom(path: { x: number; y: number }[], kind: 'truck' | 'ship', vehi
     cum.push(len)
   }
   if (len < 1) return null
-  return { pts, cum, len, kind, vehicles }
+  return { pts, cum, len, kind, vehicles, color }
 }
 
 function pointAt(lane: Lane, t: number): Pt {
@@ -318,56 +337,164 @@ function pointAt(lane: Lane, t: number): Pt {
 /** Světová rychlost vozidla v px/ms (při 1×) — lodě jsou pomalejší než auta. */
 const PX_PER_MS = { truck: 0.045, ship: 0.02 } as const
 
-function drawTruck(ctx: CanvasRenderingContext2D, x: number, y: number) {
+/**
+ * Tahač s návěsem: kabina vpředu, barevný kontejner vzadu, kola a stín.
+ * `dir` překlopí kresbu podle směru jízdy (vpravo/vlevo), `long` přidá druhý
+ * návěs u vícekusových vozových parků.
+ */
+function drawTruck(
+  ctx: CanvasRenderingContext2D, x: number, y: number,
+  dir: 1 | -1, cargo: string, long: boolean,
+) {
   ctx.save()
   ctx.translate(x, y - 2)
-  ctx.globalAlpha = 0.28
+  ctx.scale(dir, 1)
+  // stín
+  ctx.globalAlpha = 0.3
   ctx.fillStyle = '#000'
   ctx.beginPath()
-  ctx.ellipse(0, 1.5, 7, 3, 0, 0, Math.PI * 2)
+  ctx.ellipse(-1, 2, long ? 11 : 8.5, 3.2, 0, 0, Math.PI * 2)
   ctx.fill()
   ctx.globalAlpha = 1
-  fillPoly(ctx, [{ x: -6, y: -1 }, { x: 0, y: 2 }, { x: 0, y: -4 }, { x: -6, y: -7 }], '#8a5a3b')
-  fillPoly(ctx, [{ x: 0, y: 2 }, { x: 6, y: -1 }, { x: 6, y: -7 }, { x: 0, y: -4 }], '#b07a4e')
-  fillPoly(ctx, [{ x: -6, y: -7 }, { x: 0, y: -4 }, { x: 6, y: -7 }, { x: 0, y: -10 }], '#d09a66')
-  fillPoly(ctx, [{ x: 3, y: -1 }, { x: 6, y: 0.5 }, { x: 6, y: -3.5 }, { x: 3, y: -5 }], '#3f4a5a')
-  fillPoly(ctx, [{ x: 6, y: 0.5 }, { x: 8.5, y: -0.7 }, { x: 8.5, y: -4.7 }, { x: 6, y: -3.5 }], '#55637a')
-  fillPoly(ctx, [{ x: 3, y: -5 }, { x: 6, y: -3.5 }, { x: 8.5, y: -4.7 }, { x: 5.5, y: -6.2 }], '#74869f')
+
+  const trailerLen = long ? 13 : 10
+  // návěs: pravá bočnice (světlo), čelo, střecha
+  fillPoly(ctx, [
+    { x: -trailerLen, y: -1.5 }, { x: 1, y: 2.5 }, { x: 1, y: -4.5 }, { x: -trailerLen, y: -8.5 },
+  ], shade(cargo, 0.78))
+  fillPoly(ctx, [
+    { x: 1, y: 2.5 }, { x: 4, y: 1 }, { x: 4, y: -6 }, { x: 1, y: -4.5 },
+  ], cargo)
+  fillPoly(ctx, [
+    { x: -trailerLen, y: -8.5 }, { x: 1, y: -4.5 }, { x: 4, y: -6 }, { x: -trailerLen + 3, y: -10 },
+  ], shade(cargo, 1.22))
+  // žebrování kontejneru
+  ctx.strokeStyle = '#00000030'
+  ctx.lineWidth = 0.6
+  for (let i = 1; i < 4; i++) {
+    const t = i / 4
+    const bx = -trailerLen + t * (trailerLen + 1)
+    const by = -1.5 + t * 4
+    ctx.beginPath()
+    ctx.moveTo(bx, by)
+    ctx.lineTo(bx, by - 7)
+    ctx.stroke()
+  }
+  // kabina
+  fillPoly(ctx, [
+    { x: 4, y: 1 }, { x: 8.5, y: -1.2 }, { x: 8.5, y: -6.4 }, { x: 4, y: -4.2 },
+  ], '#3f4a5a')
+  fillPoly(ctx, [
+    { x: 8.5, y: -1.2 }, { x: 10.5, y: -2.2 }, { x: 10.5, y: -7 }, { x: 8.5, y: -6.4 },
+  ], '#55637a')
+  fillPoly(ctx, [
+    { x: 4, y: -4.2 }, { x: 8.5, y: -6.4 }, { x: 10.5, y: -7 }, { x: 6, y: -4.9 },
+  ], '#74869f')
+  // okno kabiny
+  fillPoly(ctx, [
+    { x: 8.7, y: -3.1 }, { x: 10.2, y: -3.8 }, { x: 10.2, y: -6.2 }, { x: 8.7, y: -5.6 },
+  ], '#9fd4ff', 0.9)
+  // světlo
+  ctx.fillStyle = '#ffe9a8'
+  ctx.fillRect(10.1, -2.4, 1.2, 1)
+  // kola
   ctx.fillStyle = '#14181f'
-  ctx.beginPath()
-  ctx.ellipse(-3.5, 0.6, 1.5, 0.9, 0, 0, Math.PI * 2)
-  ctx.ellipse(3.5, 0.2, 1.5, 0.9, 0, 0, Math.PI * 2)
-  ctx.fill()
+  for (const wx of [-trailerLen + 2.5, -3.5, 5.5, 8.8]) {
+    ctx.beginPath()
+    ctx.ellipse(wx, wx < 0 ? 0.4 - wx * 0.0 : 0.2, 1.5, 0.95, 0, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.fillStyle = '#5d636d'
+  for (const wx of [-trailerLen + 2.5, -3.5, 5.5, 8.8]) {
+    ctx.beginPath()
+    ctx.ellipse(wx, wx < 0 ? 0.4 : 0.2, 0.7, 0.42, 0, 0, Math.PI * 2)
+    ctx.fill()
+  }
   ctx.restore()
 }
 
-function drawShip(ctx: CanvasRenderingContext2D, x: number, y: number) {
+/** Nákladní loď: trup s ponorkou, řada kontejnerů, nástavba na zádi, brázda. */
+function drawShip(
+  ctx: CanvasRenderingContext2D, x: number, y: number, dir: 1 | -1, cargo: string,
+) {
   ctx.save()
   ctx.translate(x, y - 2)
+  ctx.scale(dir, 1)
+  // brázda za zádí
+  ctx.strokeStyle = '#9fc7e8'
+  ctx.globalAlpha = 0.4
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(-16, 2)
+  ctx.quadraticCurveTo(-11, 5.5, -5, 4.5)
+  ctx.stroke()
+  ctx.globalAlpha = 0.22
+  ctx.beginPath()
+  ctx.moveTo(-19, 4.4)
+  ctx.quadraticCurveTo(-13, 7.5, -6, 6.4)
+  ctx.stroke()
+  ctx.globalAlpha = 1
+  // stín
   ctx.globalAlpha = 0.22
   ctx.fillStyle = '#000'
   ctx.beginPath()
-  ctx.ellipse(0, 2.5, 12, 4, 0, 0, Math.PI * 2)
+  ctx.ellipse(0, 2.5, 13, 4, 0, 0, Math.PI * 2)
   ctx.fill()
   ctx.globalAlpha = 1
-  fillPoly(ctx, [{ x: -11, y: -1 }, { x: 0, y: 4.5 }, { x: 0, y: 0 }, { x: -11, y: -5.5 }], '#232c3a')
-  fillPoly(ctx, [{ x: 0, y: 4.5 }, { x: 11, y: -1 }, { x: 11, y: -5.5 }, { x: 0, y: 0 }], '#35435a')
-  fillPoly(ctx, [{ x: -11, y: -5.5 }, { x: 0, y: 0 }, { x: 11, y: -5.5 }, { x: 0, y: -11 }], '#485872')
-  fillPoly(ctx, [{ x: -5, y: -5 }, { x: 0, y: -2.5 }, { x: 3, y: -4 }, { x: -2, y: -6.5 }], '#b06459')
-  fillPoly(ctx, [{ x: -5, y: -5 }, { x: 0, y: -2.5 }, { x: 0, y: -4.5 }, { x: -5, y: -7 }], '#8a4d45')
-  fillPoly(ctx, [{ x: 0, y: -2.5 }, { x: 3, y: -4 }, { x: 3, y: -6 }, { x: 0, y: -4.5 }], '#c97b6d')
-  fillPoly(ctx, [{ x: 1, y: -6 }, { x: 4, y: -4.5 }, { x: 6, y: -5.5 }, { x: 3, y: -7 }], '#5a8f9c')
-  fillPoly(ctx, [{ x: -9, y: -5.5 }, { x: -6, y: -4 }, { x: -6, y: -8 }, { x: -9, y: -9.5 }], '#8fa2bd')
-  fillPoly(ctx, [{ x: -6, y: -4 }, { x: -3, y: -5.5 }, { x: -3, y: -9.5 }, { x: -6, y: -8 }], '#b9c8dd')
-  ctx.strokeStyle = '#9fc7e8'
-  ctx.globalAlpha = 0.45
-  ctx.lineWidth = 0.8
-  ctx.beginPath()
-  ctx.moveTo(-14, 1)
-  ctx.quadraticCurveTo(-9, 5, -4, 4)
-  ctx.stroke()
-  ctx.globalAlpha = 1
+  // trup
+  fillPoly(ctx, [
+    { x: -12, y: -1 }, { x: 0, y: 4.5 }, { x: 0, y: 0.5 }, { x: -12, y: -5 },
+  ], '#232c3a')
+  fillPoly(ctx, [
+    { x: 0, y: 4.5 }, { x: 12, y: -1.5 }, { x: 12, y: -5.5 }, { x: 0, y: 0.5 },
+  ], '#35435a')
+  fillPoly(ctx, [
+    { x: -12, y: -5 }, { x: 0, y: 0.5 }, { x: 12, y: -5.5 }, { x: 0, y: -11 },
+  ], '#485872')
+  // ponorka (červená linka)
+  plineHull(ctx, [{ x: -12, y: -1.4 }, { x: 0, y: 4.1 }, { x: 12, y: -1.9 }], '#b06459', 1.2)
+  // paluba
+  fillPoly(ctx, [
+    { x: -10, y: -5.4 }, { x: 0, y: -0.6 }, { x: 10, y: -5.8 }, { x: 0, y: -10.4 },
+  ], '#5a6a85')
+  // kontejnery (2 řady)
+  const rows: [number, number, string][] = [
+    [-4.5, -6.2, cargo], [-0.5, -8.1, shade(cargo, 1.25)],
+    [3.5, -10, shade(cargo, 0.8)], [-2.5, -4.2, '#e8c07a'], [1.5, -6.1, '#5a8f9c'],
+  ]
+  for (const [dx, dy, col] of rows) {
+    fillPoly(ctx, [
+      { x: dx - 2, y: dy + 2 }, { x: dx, y: dy + 3 }, { x: dx, y: dy + 0.6 }, { x: dx - 2, y: dy - 0.4 },
+    ], shade(col, 0.8))
+    fillPoly(ctx, [
+      { x: dx, y: dy + 3 }, { x: dx + 2, y: dy + 2 }, { x: dx + 2, y: dy - 0.4 }, { x: dx, y: dy + 0.6 },
+    ], col)
+    fillPoly(ctx, [
+      { x: dx - 2, y: dy - 0.4 }, { x: dx, y: dy + 0.6 }, { x: dx + 2, y: dy - 0.4 }, { x: dx, y: dy - 1.4 },
+    ], shade(col, 1.3))
+  }
+  // nástavba na zádi
+  fillPoly(ctx, [
+    { x: -11, y: -5.6 }, { x: -8, y: -4.2 }, { x: -8, y: -8.6 }, { x: -11, y: -10 },
+  ], '#8fa2bd')
+  fillPoly(ctx, [
+    { x: -8, y: -4.2 }, { x: -5.6, y: -5.4 }, { x: -5.6, y: -9.8 }, { x: -8, y: -8.6 },
+  ], '#b9c8dd')
+  fillPoly(ctx, [
+    { x: -11, y: -10 }, { x: -8, y: -8.6 }, { x: -5.6, y: -9.8 }, { x: -8.6, y: -11.2 },
+  ], '#d7e2f0')
+  ctx.fillStyle = '#3f4a5a'
+  ctx.fillRect(-9.4, -12.6, 1.4, 2.6)                      // komín
   ctx.restore()
+}
+
+function plineHull(ctx: CanvasRenderingContext2D, pts: Pt[], color: string, w: number) {
+  ctx.beginPath()
+  ctx.moveTo(pts[0].x, pts[0].y)
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+  ctx.strokeStyle = color
+  ctx.lineWidth = w
+  ctx.stroke()
 }
 
 /* ── signature obsahu mapy (offscreen vrstva se překreslí jen při změně) ── */
@@ -451,7 +578,8 @@ export default function WorldMap({
     const out: Lane[] = []
     for (const r of routes) {
       if (r.status !== 'active') continue
-      const l = laneFrom(r.path, r.mode, r.vehicles)
+      const l = laneFrom(r.path, r.mode, r.vehicles,
+        CARGO_COLORS[out.length % CARGO_COLORS.length])
       if (l) out.push(l)
     }
     return out
@@ -574,7 +702,11 @@ export default function WorldMap({
     ctx.clearRect(0, 0, cv.width, cv.height)
     ctx.save()
     ctx.translate(TERR_PAD - bounds.x, TERR_PAD - bounds.y)
-    for (const p of map.plots) drawTileBase(ctx, p, myCompanyId)
+    const roadSet = new Set<string>()
+    for (const p of map.plots) {
+      if (p.type === 'road' || p.b_code === 'road') roadSet.add(`${p.x},${p.y}`)
+    }
+    for (const p of map.plots) drawTileBase(ctx, p, myCompanyId, roadSet)
     ctx.restore()
   }, [map, myCompanyId, bounds])
 
@@ -652,15 +784,22 @@ export default function WorldMap({
         for (let i = 0; i < l.vehicles; i++) {
           const t = ((clock * PX_PER_MS[l.kind]) / l.len + i / l.vehicles) % 1
           const p = pointAt(l, t)
-          if (l.kind === 'ship') drawShip(ctx, p.x, p.y)
-          else drawTruck(ctx, p.x, p.y)
+          const p2 = pointAt(l, (t + 0.004) % 1)
+          const dir = p2.x >= p.x ? 1 : -1
+          if (l.kind === 'ship') drawShip(ctx, p.x, p.y, dir, l.color)
+          else drawTruck(ctx, p.x, p.y, dir, l.color, l.vehicles > 1)
         }
       }
 
-      // 3) budovy (painter's order, jen viditelné)
+      // 3) budovy (painter's order, jen viditelné); v noci svítí okna a neony
+      const hb = hourRef.current
+      let nightF = 0
+      if (hb >= 21 || hb < 4) nightF = 1
+      else if (hb >= 19) nightF = (hb - 19) / 2
+      else if (hb < 6) nightF = (6 - hb) / 2
       for (const p of orderedRef.current) {
         if (!p.b_id || !inView(p)) continue
-        drawBuilding(ctx, p, tileCenter(p.x, p.y), now)
+        drawBuilding(ctx, p, tileCenter(p.x, p.y), now, nightF)
       }
 
       // 4) výběr a hover

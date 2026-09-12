@@ -92,14 +92,26 @@ export default function TerminalView({
 }: Props) {
   const [filter, setFilter] = useState('')
 
-  // Tutoriál: poprvé automaticky (localStorage), jinak tlačítkem ✦.
+  // Tutoriál: ukáže se POKAŽDÉ, když se Terminál otevře — dokud ho hráč
+  // nevypne tlačítkem „Příště už nezobrazovat" (localStorage 'off').
+  // Tlačítko ✦ ho otevře kdykoli znovu, i když je vypnutý.
   const [tut, setTut] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null
-    return window.localStorage.getItem(TUT_KEY) === 'done' ? null : 0
+    return window.localStorage.getItem(TUT_KEY) === 'off' ? null : 0
   })
-  const tutFinish = () => {
+  const [suppressed, setSuppressed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(TUT_KEY) === 'off'
+  })
+  const tutFinish = () => setTut(null)
+  const tutDisable = () => {
     setTut(null)
-    if (typeof window !== 'undefined') window.localStorage.setItem(TUT_KEY, 'done')
+    setSuppressed(true)
+    if (typeof window !== 'undefined') window.localStorage.setItem(TUT_KEY, 'off')
+  }
+  const tutUnsuppress = () => {
+    setSuppressed(false)
+    if (typeof window !== 'undefined') window.localStorage.removeItem(TUT_KEY)
   }
   const tutTarget = tut !== null ? TUT_STEPS[tut]?.target ?? null : null
 
@@ -137,7 +149,8 @@ export default function TerminalView({
           ✦ Tutoriál
         </button>
         {tut !== null && (
-          <TerminalTutorial step={tut} onStep={setTut} onFinish={tutFinish} />
+          <TerminalTutorial step={tut} onStep={setTut} onFinish={tutFinish}
+            onDisable={tutDisable} suppressed={suppressed} onUnsuppress={tutUnsuppress} />
         )}
         {/* ── trh ─────────────────────────────────────────────────────────── */}
         <section data-tut="market"

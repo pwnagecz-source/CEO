@@ -6,6 +6,7 @@ type Props = {
   companyId: string
   onClose: () => void
   onChanged: () => void
+  onToast?: (title: string, text?: string) => void
 }
 
 const LOAN_AMOUNTS = [500, 1000, 2500, 5000]
@@ -15,7 +16,7 @@ const LOAN_AMOUNTS = [500, 1000, 2500, 5000]
  * denní výsledovka (z podvojného journalu, tedy do koruny přesná), půjčky
  * se stropem podle úrovně a manažeři s efekty na výrobu/logistiku/poplatky.
  */
-export default function FinanceView({ companyId, onClose, onChanged }: Props) {
+export default function FinanceView({ companyId, onClose, onChanged, onToast }: Props) {
   const [pnl, setPnl] = useState<Pnl | null>(null)
   const [loans, setLoans] = useState<LoansInfo | null>(null)
   const [execs, setExecs] = useState<ExecRow[]>([])
@@ -104,6 +105,7 @@ export default function FinanceView({ companyId, onClose, onChanged }: Props) {
                 disabled={busy !== null || (loans?.capacity ?? 0) < a}
                 onClick={() => void act(`loan-${a}`, async () => {
                   await api.takeLoan(companyId, a)
+                  onToast?.(`🏦 Půjčka ${money(a)} připsána`, 'Úrok 0,02 % z jistiny za herní hodinu.')
                   return `Půjčka ${money(a)} připsána. Úrok 0,02 % z jistiny za herní hodinu.`
                 })}>
                 {busy === `loan-${a}` ? '…' : `+ ${money(a)}`}
@@ -122,6 +124,7 @@ export default function FinanceView({ companyId, onClose, onChanged }: Props) {
                 disabled={busy !== null}
                 onClick={() => void act(`repay-${l.id}`, async () => {
                   const r = await api.repayLoan(l.id, companyId)
+                  onToast?.(`🏦 Půjčka splacena`, `−${money(r.repaid)} · úroky dál nenabíhají`)
                   return `Splaceno ${money(r.repaid)}.`
                 })}>
                 {busy === `repay-${l.id}` ? '…' : 'Splatit'}
@@ -145,6 +148,7 @@ export default function FinanceView({ companyId, onClose, onChanged }: Props) {
                       disabled={busy !== null}
                       onClick={() => void act(`fire-${e.role}`, async () => {
                         await api.fireExecutive(companyId, e.role)
+                        onToast?.(`👔 ${e.label} propuštěn(a)`, 'Efekt manažera už neplatí.')
                         return `${e.label} propuštěn(a).`
                       })}>
                       {busy === `fire-${e.role}` ? '…' : 'Propustit'}
@@ -159,6 +163,7 @@ export default function FinanceView({ companyId, onClose, onChanged }: Props) {
                       disabled={busy !== null}
                       onClick={() => void act(`hire-${e.role}`, async () => {
                         const r = await api.hireExecutive(companyId, e.role)
+                        onToast?.(`👔 ${r.name} nastupuje`, `${e.label} · ${e.effect}`)
                         return `${r.name} nastupuje jako ${e.label}.`
                       })}>
                       {busy === `hire-${e.role}` ? '…' : 'Najmout'}

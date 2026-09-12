@@ -53,10 +53,19 @@ export const TUT_STEPS: TutStep[] = [
 type Props = {
   step: number
   onStep: (n: number) => void
+  /** Zavře tutoriál jen teď — příště se zase ukáže. */
   onFinish: () => void
+  /** „Příště už nezobrazovat" — uloží se natrvalo (localStorage). */
+  onDisable: () => void
+  /** Je tutoriál trvale vypnutý (a otevřený jen přes ✦)? */
+  suppressed: boolean
+  /** Znovu zapne automatické zobrazování. */
+  onUnsuppress: () => void
 }
 
-export default function TerminalTutorial({ step, onStep, onFinish }: Props) {
+export default function TerminalTutorial({
+  step, onStep, onFinish, onDisable, suppressed, onUnsuppress,
+}: Props) {
   const s = TUT_STEPS[step]
   if (!s) return null
   const last = step >= TUT_STEPS.length - 1
@@ -65,7 +74,8 @@ export default function TerminalTutorial({ step, onStep, onFinish }: Props) {
       <div className="tut-card">
         <div className="tut-card__head">
           <strong>{s.title}</strong>
-          <button className="ghost tut-card__skip" onClick={onFinish}>Přeskočit ✕</button>
+          <button className="ghost tut-card__skip" onClick={onFinish}
+            title="Zavřít tutoriál (příště se ukáže znovu)">Přeskočit ✕</button>
         </div>
         <p>{s.text}</p>
         <div className="tut-card__btns">
@@ -76,6 +86,18 @@ export default function TerminalTutorial({ step, onStep, onFinish }: Props) {
           {last
             ? <button className="btn btn--primary btn--sm" onClick={onFinish}>Hotovo ✦</button>
             : <button className="btn btn--primary btn--sm" onClick={() => onStep(step + 1)}>Další →</button>}
+        </div>
+        <div className="tut-card__foot">
+          {suppressed ? (
+            <button className="ghost tut-card__quiet" onClick={onUnsuppress}>
+              🔔 Příště zase zobrazit
+            </button>
+          ) : (
+            <button className="ghost tut-card__quiet" onClick={onDisable}
+              title="Tutoriál se už při otevření Terminálu nebude objevovat; ✦ ho kdykoli vrátí">
+              🔕 Příště už nezobrazovat
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -21,6 +21,7 @@ import type { Db } from './db.ts'
 import { many, one } from './db.ts'
 import { post, round6 } from './ledger.ts'
 import { MarketError } from './market.ts'
+import { companyName, logEvent } from './events.ts'
 
 export const MAX_LEVEL = 10
 
@@ -230,7 +231,12 @@ export async function researchTick(
       RETURNING company_id::int, code`,
     [simHours],
   )
-  for (const r of done) await grantXp(d, r.company_id, 25)
+  for (const r of done) {
+    await grantXp(d, r.company_id, 25)
+    const name = BY_CODE.get(r.code)?.name ?? r.code
+    await logEvent(d, worldId, 'research',
+      `🔬 Výzkum „${name}“ dokončen — ${await companyName(d, r.company_id)}`, simHours)
+  }
   return done.length
 }
 

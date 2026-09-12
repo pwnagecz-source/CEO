@@ -27,6 +27,7 @@ import { MarketError, placeOrder } from './market.ts'
 import { buyPlot, buildBuilding, upgradeBuilding, upgradeCost } from './game.ts'
 import { refPrices } from './contracts.ts'
 import { researchList, startResearch } from './progression.ts'
+import { logEvent } from './events.ts'
 
 const MAX_OPEN_ORDERS = 6
 const SELL_SURPLUS = 400        // ks, od kterých se přebytek prodává
@@ -45,13 +46,13 @@ type NpcCompany = { id: number; name: string; cash: number }
 async function npcCompanies(d: Db, worldId: number): Promise<NpcCompany[]> {
   const w = await one<{ player: number | null }>(
     d, `SELECT player_company_id::int AS player FROM worlds WHERE id=$1`, [worldId])
-  const cos = await many<{ id: number }>(
-    d, `SELECT id::int FROM companies WHERE world_id=$1 ORDER BY id`, [worldId])
+  const cos = await many<{ id: number; name: string }>(
+    d, `SELECT id::int, name FROM companies WHERE world_id=$1 ORDER BY id`, [worldId])
   const out: NpcCompany[] = []
   for (const c of cos) {
     if (w?.player !== null && w?.player !== undefined && c.id === w.player) continue
     const cash = await balance(d, worldId, { type: 'company', id: c.id }, 'cash')
-    out.push({ id: c.id, name: `#${c.id}`, cash })
+    out.push({ id: c.id, name: c.name, cash })
   }
   return out
 }
@@ -156,9 +157,9 @@ async function npcBuy(d: Db, worldId: number, npc: NpcCompany) {
 /** Upgrade → nová stavba → výzkum; první úspěch končí. */
 async function npcExpand(d: Db, worldId: number, npc: NpcCompany): Promise<string | null> {
   // 1) upgrade vlastní budovy
-  const upgradable = await many<{ id: number; level: number; capex: number }>(
+  const upgradable = await many<{ id: number; level: number; capex: number; bname: string }>(
     d,
-    `SELECT b.id::int, b.level::int, bt.base_capex::float8 AS capex
+    `SELECT b.id::int, b.level::int, bt.base_capex::float8 AS capex, bt.name AS bname
        FROM buildings b JOIN building_types bt ON bt.id = b.type_id
       WHERE b.company_id=$1 AND b.level < bt.max_level AND b.status <> 'construction'
       ORDER BY random() LIMIT 3`,
@@ -169,6 +170,8 @@ async function npcExpand(d: Db, worldId: number, npc: NpcCompany): Promise<strin
     if (npc.cash < cost * 2.5) continue
     try {
       await upgradeBuilding(d, worldId, npc.id, u.id)
+      await logEvent(d, worldId, 'expansion',
+        `⬆️ ${npc.name}: ${u.bname} → úroveň ${u.level + 1}`)
       return `upgrade #${u.id} → L${u.level + 1}`
     } catch (e) {
       if (!(e instanceof MarketError)) throw e
@@ -177,9 +180,10 @@ async function npcExpand(d: Db, worldId: number, npc: NpcCompany): Promise<strin
 
   // 2) expanze: volný pozemek u silnice + budova podle biomu
   if (npc.cash > EXPAND_CASH * 1.5) {
-    const plots = await many<{ id: number; type: string; value: number }>(
+    const plots = await many<{ id: number; type: string; value: number; x: number; y: number }>(
       d,
-      `SELECT p.id::int, p.plot_type::text AS type, p.assessed_value::float8 AS value
+      `SELECT p.id::int, p.plot_type::text AS type, p.assessed_value::float8 AS value,
+              p.x::int, p.y::int
          FROM plots p
         WHERE p.world_id=$1 AND p.status='unowned' AND p.plot_type <> 'road'
           AND EXISTS (SELECT 1 FROM plots r
@@ -189,9 +193,10 @@ async function npcExpand(d: Db, worldId: number, npc: NpcCompany): Promise<strin
       [worldId],
     )
     for (const p of plots) {
-      const bts = await many<{ code: string; capex: number }>(
+      const bts = await many<{ code: string; capex: number; bname: string }>(
         d,
-        `SELECT bt.code, bt.base_capex::float8 AS capex FROM building_types bt
+        `SELECT bt.code, bt.base_capex::float8 AS capex, bt.name AS bname
+           FROM building_types bt
           WHERE bt.required_plot_type = $1 AND bt.base_capex < $2
           ORDER BY random() LIMIT 2`,
         [p.type, npc.cash * 0.4],
@@ -201,6 +206,8 @@ async function npcExpand(d: Db, worldId: number, npc: NpcCompany): Promise<strin
       try {
         await buyPlot(d, worldId, npc.id, p.id)
         await buildBuilding(d, worldId, npc.id, p.id, bt.code)
+        await logEvent(d, worldId, 'expansion',
+          `🏗️ ${npc.name}: nová budova ${bt.bname} na [${p.x},${p.y}]`)
         return `${bt.code} na pozemku ${p.id}`
       } catch (e) {
         if (!(e instanceof MarketError)) throw e

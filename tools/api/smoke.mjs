@@ -405,7 +405,40 @@ console.log(`\n[17] Fáze F — progrese, zakázky, půjčky, manažeři, upgrad
 
   await post('/clock', { speed: 1 })
 }
-check('audit PASS po Fázi F', (await j('/audit')).verdict, 'PASS')
+console.log('\n── [18] Prezentační vlna: feed událostí světa ─────────────────')
+{
+  const ev0 = await j('/events?limit=25')
+  check('GET /api/events → pole událostí', Array.isArray(ev0.events), true)
+  check('limit je respektován (≤ 25)', ev0.events.length <= 25, true)
+  const ev2 = await j('/events?limit=2')
+  check('limit=2 → max 2 záznamy', ev2.events.length <= 2, true)
+
+  // [17] nastartovalo eff_timber (2 herní hodiny) — jeden tick při rychlosti 4
+  // (4 h) ho dokončí a musí zapsat událost do feedu. Deterministický trigger.
+  await post('/clock', { speed: 4 })
+  let evs = []
+  for (let i = 0; i < 20 && !evs.some((e) => e.kind === 'research'); i++) {
+    await new Promise((r) => setTimeout(r, 2000))
+    evs = (await j('/events?limit=25')).events
+  }
+  await post('/clock', { speed: 1 })
+
+  check('dokončený výzkum se objevil ve feedu', evs.some((e) => e.kind === 'research'), true)
+  const KINDS = ['expansion', 'research', 'levelup', 'contract', 'trade']
+  let shapeOk = true
+  for (const e of evs) {
+    if (typeof e.id !== 'number' || typeof e.text !== 'string' || e.text.length === 0
+      || typeof e.simHour !== 'number' || typeof e.at !== 'string' || !KINDS.includes(e.kind)) {
+      shapeOk = false
+      break
+    }
+  }
+  check('tvar události {id,kind,text,simHour,at}', shapeOk, true)
+  check('události jsou řazené od nejnovější',
+    evs.every((e, i) => i === 0 || evs[i - 1].id >= e.id), true)
+}
+
+check('audit PASS po prezentační vlně', (await j('/audit')).verdict, 'PASS')
 {
   const mf = await j('/macro')
   check('M2 identita drží po Fázi F',

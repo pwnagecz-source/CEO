@@ -236,6 +236,10 @@ export type Pnl = { items: PnlItem[]; revenue: number; costs: number; net: numbe
 
 export type HistoryPoint = { hour: number; mid: number | null; last: number | null }
 
+export type WorldEvent = {
+  id: number; kind: string; text: string; simHour: number; at: string
+}
+
 class ApiError extends Error {
   constructor(readonly status: number, readonly body: unknown, message: string) {
     super(message)
@@ -363,6 +367,7 @@ export const api = {
   demolishBuilding: (buildingId: string | number, companyId: string | number) =>
     req<{ buildingId: number; refund: number }>(`/buildings/${buildingId}/demolish`, {
       method: 'POST', body: JSON.stringify({ companyId: Number(companyId) }) }),
+  events: (limit = 25) => req<{ events: WorldEvent[] }>(`/events?limit=${limit}`),
 }
 
 export { ApiError }

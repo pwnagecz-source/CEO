@@ -80,3 +80,13 @@ CREATE TABLE IF NOT EXISTS price_history (
     last      numeric(24,6),
     CONSTRAINT price_history_uniq UNIQUE (world_id, item_id, sim_hour)
 );
+
+CREATE TABLE IF NOT EXISTS world_events (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    world_id    bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    sim_hour    bigint NOT NULL DEFAULT 0,
+    kind        text NOT NULL,
+    text        text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS world_events_world_idx ON world_events (world_id, id DESC);

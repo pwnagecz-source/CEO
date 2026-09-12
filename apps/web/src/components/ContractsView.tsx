@@ -6,6 +6,7 @@ type Props = {
   companyId: string
   onClose: () => void
   onChanged: () => void
+  onToast?: (title: string, text?: string) => void
 }
 
 /** Kolik zbývá do termínu, lidsky (herní hodiny → dny/hodiny). */
@@ -20,7 +21,7 @@ function deadline(h: number): string {
  * Přijmout → vyskladnit ze všech svých skladů → inkasovat + XP.
  * Hodiny do termínu ubíhají s herním časem, proto refresh po 2 s.
  */
-export default function ContractsView({ companyId, onClose, onChanged }: Props) {
+export default function ContractsView({ companyId, onClose, onChanged, onToast }: Props) {
   const [rows, setRows] = useState<ContractRow[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -55,11 +56,13 @@ export default function ContractsView({ companyId, onClose, onChanged }: Props) 
 
   const take = (c: ContractRow) => void act(`take-${c.id}`, async () => {
     await api.takeContract(c.id, companyId)
+    onToast?.(`📋 Zakázka přijata: ${c.itemName}`, `${qty(c.qty)} ks do ${deadline(c.hoursLeft)} · odměna ${money(c.total)}`)
     return `Zakázka „${c.itemName}“ přijata — do termínu zbývá ${deadline(c.hoursLeft)}.`
   })
 
   const deliver = (c: ContractRow) => void act(`deliver-${c.id}`, async () => {
     const r = await api.deliverContract(c.id, companyId)
+    onToast?.('📋 Zakázka splněna!', `+${money(r.paid)} · +${r.xp} XP${r.level > 1 ? ` · úroveň ${r.level}` : ''}`)
     return `Splněno! Stát zaplatil ${money(r.paid)} a dostáváš ${r.xp} XP.`
   })
 

@@ -4,8 +4,9 @@ import {
   type Audit, type Book, type CatalogRow, type Clock, type CodexInput, type CodexRecipe,
   type Company, type CompanySummary, type Item, type Macro, type MapData, type MapPlot,
   type HistoryPoint, type OpenOrder, type PlaceOrderResult, type QuestState, type RoadQuote,
-  type RouteMode, type RouteQuoteResult, type Trade, type TransportRoute,
+  type RouteMode, type RouteQuoteResult, type Trade, type TransportRoute, type WorldEvent,
 } from './api'
+import { money, qty } from './fmt'
 import CodexView from './components/CodexView'
 import ContractsView from './components/ContractsView'
 import FinanceView from './components/FinanceView'
@@ -13,6 +14,7 @@ import GameView from './components/GameView'
 import ResearchView from './components/ResearchView'
 import SetupScreen from './components/SetupScreen'
 import TerminalView from './components/TerminalView'
+import ToastHost, { type Toast, type ToastKind } from './components/ToastHost'
 
 const POLL_MS = 2500
 const DEFAULT_ITEM = 'log'
@@ -61,6 +63,81 @@ export default function App() {
   const [mode, setMode] = useState<'game' | 'terminal' | 'codex'>('game')
   const [modal, setModal] = useState<null | 'research' | 'contracts' | 'finance'>(null)
   const [history, setHistory] = useState<HistoryPoint[]>([])
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [events, setEvents] = useState<WorldEvent[]>([])
+  const [contractBadge, setContractBadge] = useState(0)
+  const [researchBadge, setResearchBadge] = useState(false)
+  const [lvlFlash, setLvlFlash] = useState(false)
+  const toastId = useRef(0)
+
+  const pushToast = useCallback((t: { kind: ToastKind; title: string; text?: string }) => {
+    const id = ++toastId.current
+    setToasts((prev) => [...prev.slice(-4), { id, ...t }])
+    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)),
+      t.kind === 'warn' ? 7000 : 5000)
+  }, [])
+
+  // Feed světa + počet volných zakázek (badge) — poll 5 s
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try {
+        const [ev, ct] = await Promise.all([
+          api.events(20),
+          companyId ? api.contracts(companyId) : Promise.resolve({ contracts: [] }),
+        ])
+        if (!alive) return
+        setEvents(ev.events)
+        setContractBadge(ct.contracts.filter((c) => c.status === 'open').length)
+      } catch { /* svět běží dál */ }
+    }
+    void poll()
+    const t = setInterval(() => void poll(), 5000)
+    return () => { alive = false; clearInterval(t) }
+  }, [companyId])
+
+  // Progrese: dokončený výzkum a level-up → toast + badge (poll 10 s)
+  const doneResRef = useRef<Set<string> | null>(null)
+  const levelRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    let alive = true
+    const poll = async () => {
+      try {
+        const p = await api.progression(companyId)
+        if (!alive) return
+        const done = new Set(p.research.filter((r) => r.state === 'done').map((r) => r.code))
+        if (doneResRef.current) {
+          for (const code of done) {
+            if (!doneResRef.current.has(code)) {
+              const name = p.research.find((r) => r.code === code)?.name ?? code
+              pushToast({ kind: 'success', title: '🔬 Výzkum dokončen',
+                          text: `${name} — efekty už běží.` })
+              setResearchBadge(true)
+            }
+          }
+        }
+        doneResRef.current = done
+        if (levelRef.current !== null && p.level > levelRef.current) {
+          pushToast({ kind: 'success', title: `⭐ Úroveň ${p.level}!`,
+                      text: 'Odemčeno: vyšší tier výzkumu, upgrade budov, větší půjčky.' })
+          setLvlFlash(true)
+          setTimeout(() => setLvlFlash(false), 2200)
+        }
+        levelRef.current = p.level
+      } catch { /* svět běží dál */ }
+    }
+    void poll()
+    const t = setInterval(() => void poll(), 10_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [companyId, pushToast])
+
+  // ESC zavírá modaly
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setModal(null) }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
   const [book, setBook] = useState<Book | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [lastSync, setLastSync] = useState<Date | null>(null)
@@ -210,11 +287,12 @@ export default function App() {
     return () => { alive = false }
   }, [itemCode, mode])
 
-  /** Společný obal akcí ve hře: stavový text, chyba, refresh světa. */
-  async function gameAction(label: string, fn: () => Promise<void>) {
+  /** Společný obal akcí ve hře: stavový text, chyba, refresh světa, toast. */
+  async function gameAction(label: string, fn: () => Promise<string | void>) {
     setActBusy(label); setActErr(null)
     try {
-      await fn()
+      const msg = await fn()
+      if (typeof msg === 'string') pushToast({ kind: 'success', title: msg })
       await Promise.all([refresh(), refreshMap()])
     } catch (e) {
       setActErr(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : String(e)))
@@ -225,33 +303,42 @@ export default function App() {
 
   const buyPlot = (p: MapPlot) => void gameAction('Nakupuji pozemek…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
-    await api.buyPlot(p.id, Number(companyId))
+    const r = await api.buyPlot(p.id, Number(companyId))
+    return `🗺️ Pozemek [${p.x},${p.y}] koupen za ${money(r.price)}`
   })
 
   const buildAt = (p: MapPlot, code: string) => void gameAction('Stavím…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
-    await api.build(p.id, Number(companyId), code)
+    const r = await api.build(p.id, Number(companyId), code)
+    const name = catalog.find((c) => c.code === code)?.name ?? code
+    return `🏗️ ${name} — postaveno za ${money(r.capex)}`
   })
 
   const quickSell = (itemCode: string) => void gameAction('Prodávám…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
-    await api.quickSell(companyId, itemCode)
+    const r = await api.quickSell(companyId, itemCode)
+    return r.qtyFilled > 0
+      ? `💵 Prodáno ${qty(r.qtyFilled)} ks za ${money(r.totalGross)}`
+      : 'Nic se neprodalo — v booku chybí kupci. Zkus limitní příkaz v Terminálu.'
   })
 
   const upgrade = (buildingId: string) => void gameAction('Přestavuji…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
-    await api.upgradeBuilding(buildingId, companyId)
+    const r = await api.upgradeBuilding(buildingId, companyId)
+    return `⬆️ Budova na úrovni ${r.level} (−${money(r.cost)})`
   })
 
   const demolish = (buildingId: string) => void gameAction('Bourám…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
-    await api.demolishBuilding(buildingId, companyId)
+    const r = await api.demolishBuilding(buildingId, companyId)
     setSelectedPlot(null)
+    return `🧨 Zbouráno — stát odkoupil za ${money(r.refund)}`
   })
 
   const hireRoad = (p: MapPlot) => void gameAction('Stavební firma pokládá silnici…', async () => {
     if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
-    await api.hireRoad(p.id, companyId)
+    const r = await api.hireRoad(p.id, companyId)
+    return `🚜 Silnice hotová (${r.tiles} dl. za ${money(r.cost)})`
   })
 
   const createTransportRoute = (to: MapPlot, mode: RouteMode, vehicles: number) =>
@@ -260,6 +347,7 @@ export default function App() {
       await api.createRoute(companyId, routeFrom.id, to.id, mode, vehicles)
       setRouteFrom(null)
       setRouteQuote(null)
+      return mode === 'ship' ? '🚢 Lodní linka zahájena' : '🚚 Nákladní linka zahájena'
     })
 
   const removeRoute = (id: string) => void gameAction('Ruším trasu…', async () => {
@@ -404,9 +492,13 @@ export default function App() {
         onBuild={buildAt}
         onNewCompany={() => setSetup(true)}
         onOpenTerminal={() => setMode('terminal')}
-        onOpenResearch={() => setModal('research')}
+        onOpenResearch={() => { setModal('research'); setResearchBadge(false) }}
         onOpenContracts={() => setModal('contracts')}
         onOpenFinance={() => setModal('finance')}
+        events={events}
+        contractBadge={contractBadge}
+        researchBadge={researchBadge}
+        lvlFlash={lvlFlash}
         onUpgrade={upgrade}
         onDemolish={demolish}
         onQuickSell={quickSell}
@@ -428,16 +520,20 @@ export default function App() {
       />
       {modal === 'research' && companyId && (
         <ResearchView companyId={companyId} onClose={() => setModal(null)}
-          onChanged={() => { void refresh(); void refreshMap() }} />
+          onChanged={() => { void refresh(); void refreshMap() }}
+          onToast={(title, text) => pushToast({ kind: 'success', title, text })} />
       )}
       {modal === 'contracts' && companyId && (
         <ContractsView companyId={companyId} onClose={() => setModal(null)}
-          onChanged={() => { void refresh(); void refreshMap() }} />
+          onChanged={() => { void refresh(); void refreshMap() }}
+          onToast={(title, text) => pushToast({ kind: 'success', title, text })} />
       )}
       {modal === 'finance' && companyId && (
         <FinanceView companyId={companyId} onClose={() => setModal(null)}
-          onChanged={() => { void refresh(); void refreshMap() }} />
+          onChanged={() => { void refresh(); void refreshMap() }}
+          onToast={(title, text) => pushToast({ kind: 'success', title, text })} />
       )}
+      <ToastHost toasts={toasts} onDismiss={(id) => setToasts((p) => p.filter((t) => t.id !== id))} />
       </>
     )
   }
@@ -456,6 +552,7 @@ export default function App() {
 
   // ── EXPERTNÍ TERMINÁL (obchodování) ──────────────────────────────────────
   return (
+    <>
     <TerminalView
       macro={macro}
       audit={audit}
@@ -481,5 +578,7 @@ export default function App() {
       lastSync={lastSync}
       error={error}
     />
+    <ToastHost toasts={toasts} onDismiss={(id) => setToasts((p) => p.filter((t) => t.id !== id))} />
+    </>
   )
 }

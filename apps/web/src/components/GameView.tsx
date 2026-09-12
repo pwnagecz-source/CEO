@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import type {
   Audit, CatalogRow, Clock, Company, Macro, MapData, MapPlot, QuestState, RoadQuote,
-  RouteMode, RouteQuoteResult, TransportRoute,
+  RouteMode, RouteQuoteResult, TransportRoute, WorldEvent,
 } from '../api'
-import { compact, money, pct } from '../fmt'
+import { ago, compact, money, pct } from '../fmt'
 import { STATUS_GLOW, TERRAIN, terrainFor } from '../game/art'
 import { ownerColor } from '../game/iso'
 import QuestRail from './QuestRail'
@@ -29,6 +29,11 @@ type Props = {
   onOpenFinance: () => void
   onUpgrade: (buildingId: string) => void
   onDemolish: (buildingId: string) => void
+  /** feed událostí živého světa */
+  events: WorldEvent[]
+  contractBadge: number
+  researchBadge: boolean
+  lvlFlash: boolean
   onQuickSell: (itemCode: string) => void
   onHireRoad: (plot: MapPlot) => void
   onOpenCodex: () => void
@@ -62,7 +67,7 @@ export default function GameView({
   onHireRoad, onOpenCodex, onOpenResearch, onOpenContracts, onOpenFinance,
   onUpgrade, onDemolish, onSpeed, quests, clock, roadQuote,
   routes, routeFrom, routeQuote, routeQuoteErr, onRouteFrom, onCreateRoute, onDeleteRoute,
-  busy, err,
+  busy, err, events, contractBadge, researchBadge, lvlFlash,
 }: Props) {
   // Úrovňová křivka je stejná jako na serveru: xpForLevel(n) = 250·(n−1)·n
   const coLevel = company?.level ?? 1
@@ -134,7 +139,8 @@ export default function GameView({
             <span className="hud-k">Pozemky</span>
             <span className="hud-v">{myPlots.length}</span>
           </div>
-          <div className="hud-stat hud-level" title={`${coXp} XP${xpNext !== null ? ` · další úroveň v ${xpNext} XP` : ' · max'}`}>
+          <div className={'hud-stat hud-level' + (lvlFlash ? ' is-flash' : '')}
+            title={`${coXp} XP${xpNext !== null ? ` · další úroveň v ${xpNext} XP` : ' · max'}`}>
             <span className="hud-k">Úroveň</span>
             <span className="hud-v">⭐ {coLevel}</span>
             <div className="xpbar"><i style={{ width: `${xpPct}%` }} /></div>
@@ -146,8 +152,12 @@ export default function GameView({
         </div>
         <div className="hud-right">
           {audit && <span className={`badge ${audit.ok ? 'pass' : 'fail'}`}>{audit.ok ? 'svět v pořádku' : 'pozor'}</span>}
-          <button className="ghost" title="Státní zakázky — garantovaný odbyt" onClick={onOpenContracts}>📋 Zakázky</button>
-          <button className="ghost" title="Úrovně, XP a výzkumný strom" onClick={onOpenResearch}>🔬 Výzkum</button>
+          <button className="ghost" title="Státní zakázky — garantovaný odbyt" onClick={onOpenContracts}>
+            📋 Zakázky{contractBadge > 0 && <span className="hud-badge">{contractBadge}</span>}
+          </button>
+          <button className="ghost" title="Úrovně, XP a výzkumný strom" onClick={onOpenResearch}>
+            🔬 Výzkum{researchBadge && <span className="hud-badge">✦</span>}
+          </button>
           <button className="ghost" title="Výsledovka, půjčky, manažeři" onClick={onOpenFinance}>💰 Finance</button>
           <button className="ghost" onClick={onOpenCodex}>📖 Kniha</button>
           <button className="ghost" onClick={onNewCompany}>＋ Nová firma</button>
@@ -428,6 +438,19 @@ export default function GameView({
               <p className="dim">Prodej jde přes order book — cenu určuje trh, ne hra.</p>
             </div>
           )}
+
+          <section className="feed">
+            <h3>📰 Svět se hýbe</h3>
+            {events.length === 0 && (
+              <p className="dim">Zatím se nic nestalo — NPC firmy právě začínají podnikat.</p>
+            )}
+            {events.slice(0, 8).map((e) => (
+              <div key={e.id} className="feed-row">
+                <span className="feed-text">{e.text}</span>
+                <span className="feed-time">{ago(e.at)}</span>
+              </div>
+            ))}
+          </section>
 
           <div className="insp-tip">
             <h4>Jak to funguje</h4>

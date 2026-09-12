@@ -17,6 +17,7 @@ import { many, one } from './db.ts'
 import { post, round6 } from './ledger.ts'
 import { MarketError } from './market.ts'
 import { grantXp } from './progression.ts'
+import { companyName, logEvent } from './events.ts'
 
 export type ContractRow = {
   id: number
@@ -203,6 +204,9 @@ export async function deliverContract(
   await d.query(
     `UPDATE contracts SET status='done', done_at=now() WHERE id=$1`, [contractId])
   const p = await grantXp(d, companyId, c.xp)
+  await logEvent(d, worldId, 'contract',
+    `📋 Zakázka splněna: ${Math.round(c.qty)} ks ${c.code} — ${await companyName(d, companyId)}`,
+    0)
   return { id: contractId, paid: total, xp: c.xp, level: p.level }
 }
 

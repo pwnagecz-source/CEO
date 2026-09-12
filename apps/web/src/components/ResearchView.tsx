@@ -6,6 +6,7 @@ type Props = {
   companyId: string
   onClose: () => void
   onChanged: () => void
+  onToast?: (title: string, text?: string) => void
 }
 
 const TIER_LABEL: Record<number, string> = {
@@ -18,7 +19,7 @@ const TIER_LABEL: Record<number, string> = {
  * (tlačítko s cenou) / zamčené (důvod). Data si tahá sama, po akci obnoví
  * sebe i svět v App (onChanged).
  */
-export default function ResearchView({ companyId, onClose, onChanged }: Props) {
+export default function ResearchView({ companyId, onClose, onChanged, onToast }: Props) {
   const [data, setData] = useState<(Progress & { research: ResearchItem[] }) | null>(null)
   const [cash, setCash] = useState(0)
   const [busy, setBusy] = useState<string | null>(null)
@@ -41,7 +42,9 @@ export default function ResearchView({ companyId, onClose, onChanged }: Props) {
   async function start(code: string) {
     setBusy(code); setErr(null)
     try {
-      await api.startResearch(companyId, code)
+      const r = await api.startResearch(companyId, code)
+      const name = data?.research.find((i) => i.code === code)?.name ?? code
+      onToast?.(`🔬 Výzkum zahájen: ${name}`, `−${money(r.cost)} · hotovo za ${data?.research.find((i) => i.code === code)?.hours ?? '?'} herních hodin`)
       await load()
       onChanged()
     } catch (e) {

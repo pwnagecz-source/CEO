@@ -639,6 +639,17 @@ CREATE TABLE executives (
     CONSTRAINT executives_role_uniq UNIQUE (company_id, role)
 );
 
+-- Události živého světa pro feed v UI (expanze NPC, výzkum, level-upy, zakázky)
+CREATE TABLE world_events (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    world_id    bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    sim_hour    bigint NOT NULL DEFAULT 0,
+    kind        text NOT NULL,               -- 'expansion'|'research'|'levelup'|'contract'|'trade'
+    text        text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX world_events_world_idx ON world_events (world_id, id DESC);
+
 CREATE TABLE price_history (
     id        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     world_id  bigint NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,

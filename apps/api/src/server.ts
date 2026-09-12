@@ -30,6 +30,7 @@ import {
   hireRoadBuilders, isPlotConnected, roadNetwork, shortestRoadPath,
 } from './logistics.ts'
 import { questState } from './quests.ts'
+import { listEvents } from './events.ts'
 import { startTick, TICK_MS } from './tick.ts'
 
 const PORT = Number(process.env.PORT ?? 8080)
@@ -715,6 +716,11 @@ async function boot() {
   /** Denní výsledovka z cash noh journalu. */
   app.get<{ Params: { id: string } }>('/api/companies/:id/pnl', async (req) =>
     pnlToday(db, worldId, Number(req.params.id)))
+
+  /** Feed událostí živého světa (expanze, výzkum, level-upy, zakázky). */
+  app.get<{ Querystring: { limit?: string; since?: string } }>('/api/events', async (req) => ({
+    events: await listEvents(db, worldId, Math.min(50, Number(req.query.limit ?? 25))),
+  }))
 
   /** Historie cen položky (mid/last po herních hodinách). */
   app.get<{ Params: { code: string }; Querystring: { hours?: string } }>(

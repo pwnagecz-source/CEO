@@ -25,6 +25,7 @@ import { balance, post, round6 } from './ledger.ts'
 import { isPlotConnected, roadNetwork } from './logistics.ts'
 import { haulCargo } from './transport.ts'
 import { companyEffects, levelForXp, researchTick, type CompanyEffects } from './progression.ts'
+import { companyName, logEvent } from './events.ts'
 import { contractsTick } from './contracts.ts'
 import { execsTick, loansTick, recordPriceHistory } from './finance.ts'
 import { npcTick } from './npc.ts'
@@ -357,14 +358,23 @@ export async function runTick(d: Db, worldId: number) {
   // 5) Fáze F: XP z výroby → posun času → světové systémy → NPC mozky.
   // Čas se posouvá PŘED kontrakty/výzkumem, aby deadliny porovnávaly už
   // novou herní hodinu.
+  const simHours = Number(clock!.hours) + cycles
   for (const [cid, n] of xpGained) {
-    await d.query(`UPDATE companies SET xp = xp + $2 WHERE id=$1`, [cid, n])
+    const r = await one<{ xp: number }>(
+      d,
+      `UPDATE companies SET xp = xp + $2 WHERE id=$1 RETURNING xp::float8 AS xp`,
+      [cid, n],
+    )
+    const newXp = r?.xp ?? 0
+    if (levelForXp(newXp) > levelForXp(newXp - n)) {
+      await logEvent(d, worldId, 'levelup',
+        `⭐ Úroveň ${levelForXp(newXp)} — ${await companyName(d, cid)}`, simHours)
+    }
   }
   await d.query(
     `UPDATE worlds SET sim_hours = sim_hours + $2 WHERE id=$1`,
     [worldId, cycles],
   )
-  const simHours = Number(clock!.hours) + cycles
   const researchDone = await researchTick(d, worldId, simHours)
   const contracts = await contractsTick(d, worldId, simHours)
   await loansTick(d, worldId, cycles)

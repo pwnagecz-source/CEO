@@ -185,3 +185,18 @@ přežijí. To statický model nezachytí.
 cenu v pozdní hře. NPC market maker se musí vypínat, jakmile to hráčská likvidita dovolí.
 **Priorita:** `docs/70-ekonomicky-simulator.md` jde NAHORU — z P2 na **P1**, protože bez
 něj nelze ekonomiku validovat před spuštěním.
+
+## ADR-012 — Procedurální Canvas art místo sprite atlasu
+
+**Stav:** ✅ ROZHODNUTO 2026-09-12 (prezentační vlna, `docs/54-prezentace.md`)
+**Rozhodnutí:** budovy, silnice i vozidla se kreslí **procedurálně** do Canvas 2D
+(`game/buildingArt.ts`, primitiva box/roof/cylinder/chimney/windows…), ne sprite sheetem.
+**Důvod:** nulová datová stopa a pipeline (žádné PNG assety, žádný atlas packing),
+libovolný zoom bez rozmazání, jednotná paleta přes `shade()`, nová budova = ~20 řádků
+kódu místo nové sady spritů; pro solo vývoj je to nejlevnější cesta k 28 odlišným
+variantám. Deterministický seed z pozice pozemku drží detaily stabilní mezi snímky.
+**Důsledek / kdy přehodnotit:** pokud hra zamíří k „hezčí než Capital Rift“ vizuálu
+nebo přibydou animované postavičky/efekty, procedurální kresby narazí na strop
+čitelnosti ve změti tahů. Tehdy: hybrid — pozadí a terén procedurálně, budovy jako
+sprite atlas (2–3 varianty × 8 směrů není nutné, izometrie je fixní), `skinFor`/
+`drawBuildingArt` fungují jako seam k výměně.
