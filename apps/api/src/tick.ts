@@ -23,6 +23,7 @@
  */
 import { balance, post, round6 } from './ledger.ts'
 import { isPlotConnected, roadNetwork } from './logistics.ts'
+import { haulCargo } from './transport.ts'
 import type { Db } from './db.ts'
 import { many, one, tx } from './db.ts'
 
@@ -40,7 +41,14 @@ type Input = { recipe_id: number; item_id: number; code: string; qty: number; ba
 
 type InvRow = { id: number; inventory_id: number; item_id: number; code: string; avail: number }
 
-/** Sklad firmy na konkrétním pozemku; kdyby chyběl, založí se (budova už stojí). */
+/**
+ * Sklad firmy na konkrétním pozemku; kdyby chyběl, založí se (budova už stojí).
+ *
+ * Cargo simulace stojí na tom, že KAŽDÁ budova má vlastní dvorec (inventář na
+ * svém pozemku) — jinak by všechny provozy sdílely jeden sklad a nebylo co
+ * převážet. Primární inventář (HQ ze seedu) drží počáteční zásoby a do výroby
+ * vstupuje jen jako běžný sklad firmy (vstupy se berou napříč inventáři).
+ */
 async function plotInventory(
   d: Db, worldId: number, companyId: number, plotId: number,
 ): Promise<number> {
@@ -50,12 +58,6 @@ async function plotInventory(
     [companyId, plotId],
   )
   if (hit) return Number(hit.id)
-  const prim = await one<{ id: string }>(
-    d,
-    `SELECT id::text FROM inventories WHERE company_id=$1 AND is_primary LIMIT 1`,
-    [companyId],
-  )
-  if (prim) return Number(prim.id)
   const inv = await one<{ id: string }>(
     d,
     `INSERT INTO inventories (world_id, company_id, plot_id, name)
@@ -312,11 +314,14 @@ export async function runTick(d: Db, worldId: number) {
     )
   }
 
+  // 4) cargo: hráčské dopravní trasy vozí zboží mezi sklady a účtují přepravné
+  const haul = await haulCargo(d, worldId, cycles)
+
   await d.query(
     `UPDATE worlds SET sim_hours = sim_hours + $2 WHERE id=$1`,
     [worldId, cycles],
   )
-  return { produced, sold, upkeep: upkeepPaid, paused: false }
+  return { produced, sold, upkeep: upkeepPaid, paused: false, haul }
 }
 
 /**
@@ -331,9 +336,11 @@ export function startTick(getWorldId: () => number) {
     running = true
     const worldId = getWorldId()
     void tx((t) => runTick(t, worldId))
-      .then((s: { produced: number; sold: number; upkeep: number }) => {
-        if (s.produced || s.sold) {
-          console.log(`  ⚙️  tick: výroba ${s.produced}, retail ${s.sold}, údržby ${s.upkeep}`)
+      .then((s: { produced: number; sold: number; upkeep: number
+                   haul?: { units: number; routes: number } }) => {
+        if (s.produced || s.sold || s.haul?.units) {
+          const h = s.haul?.units ? `, cargo ${s.haul.units} ks (${s.haul.routes} tras)` : ''
+          console.log(`  ⚙️  tick: výroba ${s.produced}, retail ${s.sold}, údržby ${s.upkeep}${h}`)
         }
       })
       .catch((e) => console.error('  ⚠️  tick selhal:', e instanceof Error ? e.message : e))

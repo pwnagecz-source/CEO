@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { MapData, MapPlot } from '../api'
+import type { MapData, MapPlot, TransportRoute } from '../api'
 import {
   FLOOR_H, TILE_H, TILE_W, diamond, diamondPoints, gridBounds, ownerColor, poly,
   tileCenter, up, type Pt,
@@ -11,8 +11,10 @@ type Props = {
   myCompanyId: string | null
   selectedPlotId: string | null
   onSelectPlot: (plot: MapPlot | null) => void
-  /** rychlost herních hodin (0 = pauza → auta stojí) */
+  /** rychlost herních hodin (0 = pauza → doprava stojí) */
   clockSpeed: number
+  /** hráčem založené cargo trasy — jen po nich něco jezdí */
+  routes: TransportRoute[]
 }
 
 /** Deterministický „náhodný“ detail terénu (stromy, skály) — stabilní mezi rendery. */
@@ -212,6 +214,20 @@ type TileProps = {
  * jinak překreslil celou scénu při každém pohybu myši. Memoizace znamená, že
  * při hoveru se přepočítají jen dvě dlaždice (stará a nová).
  */
+function tileEqual(a: TileProps, b: TileProps): boolean {
+  const pa = a.plot; const pb = b.plot
+  return a.myCompanyId === b.myCompanyId && a.isSel === b.isSel && a.isHover === b.isHover
+    && a.onSelect === b.onSelect && a.onHover === b.onHover
+    && pa.id === pb.id && pa.type === pb.type && pa.status === pb.status
+    && pa.owner_id === pb.owner_id && pa.owner_name === pb.owner_name
+    && pa.b_id === pb.b_id && pa.b_code === pb.b_code && pa.b_name === pb.b_name
+    && pa.b_level === pb.b_level && pa.b_status === pb.b_status
+    && pa.b_retail === pb.b_retail && pa.b_output === pb.b_output
+    && pa.b_industry === pb.b_industry && pa.b_tier === pb.b_tier
+    && pa.richness === pb.richness && pa.assessed_value === pb.assessed_value
+    && pa.connected === pb.connected
+}
+
 const Tile = memo(function Tile({ plot, myCompanyId, isSel, isHover, onSelect, onHover }: TileProps) {
   const c = tileCenter(plot.x, plot.y)
   const owned = plot.owner_id !== null
@@ -270,24 +286,29 @@ const Tile = memo(function Tile({ plot, myCompanyId, isSel, isHover, onSelect, o
       )}
     </g>
   )
-})
+}, tileEqual)
 
 type View = { x: number; y: number; w: number; h: number }
 
-/* ── doprava: auta s modely, která opravdu jezdí po silnicích ─────────────── */
+/* ── doprava: auta a lodě JEZDÍ JEN PO HRÁČEM ZALOŽENÝCH TRASÁCH ─────────────
+ * Cargo simulace: žádná „samovolná“ doprava. Každá trasa má uloženou cestu
+ * (pole dlaždic ze serveru) a počet vozidel; ta po ní krouží JEDNOSMĚRNĚ
+ * (žádné popojíždění tam a zpět). Rychlost sleduje herní čas — v pauze stojí.
+ */
 
-type Route = { pts: Pt[]; cum: number[]; len: number; kind: 'truck' | 'ship' }
+type Lane = { pts: Pt[]; cum: number[]; len: number; kind: 'truck' | 'ship'; vehicles: number }
 
-const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const
-
-function toRoute(pts: Pt[]): Route {
+function laneFrom(path: { x: number; y: number }[], kind: 'truck' | 'ship', vehicles: number): Lane | null {
+  const pts = path.map((t) => tileCenter(t.x, t.y))
+  if (pts.length < 2) return null
   const cum = [0]
   let len = 0
   for (let i = 1; i < pts.length; i++) {
     len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
     cum.push(len)
   }
-  return { pts, cum, len, kind: 'truck' }
+  if (len < 1) return null
+  return { pts, cum, len, kind, vehicles }
 }
 
 /** Izometrická dodávka: stín + korba + kabina. Malá, ale čitelná i oddáleně. */
@@ -308,63 +329,6 @@ function Truck({ g }: { g: React.RefObject<SVGGElement | null> }) {
       <ellipse cx={3.5} cy={0.2} rx={1.5} ry={0.9} fill="#14181f" />
     </g>
   )
-}
-
-function pointAt(route: Route, t: number): Pt {
-  const d = t * route.len
-  let i = 1
-  while (i < route.cum.length - 1 && route.cum[i] < d) i++
-  const seg = route.cum[i] - route.cum[i - 1] || 1
-  const f = (d - route.cum[i - 1]) / seg
-  const a = route.pts[i - 1]; const b = route.pts[i]
-  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f }
-}
-
-/**
- * Spočítá trasy pro auta: od státního tahu po souvislé síti k produkčním
- * budovám a zpět. BFS je multi-source ze všech státních dlaždic, takže
- * „parent“ řetěz dá nejkratší cestu k síti pro kteroukoli dlaždici.
- */
-function buildRoutes(map: MapData): Route[] {
-  const byPos = new Map<string, MapPlot>()
-  for (const p of map.plots) byPos.set(`${p.x},${p.y}`, p)
-  const isRoad = (p: MapPlot) => p.type === 'road' || p.b_code === 'road'
-  const roads = map.plots.filter(isRoad)
-  const parent = new Map<string, string | null>()
-  const queue: MapPlot[] = []
-  for (const r of roads) if (r.type === 'road') { parent.set(`${r.x},${r.y}`, null); queue.push(r) }
-  while (queue.length > 0) {
-    const t = queue.shift()!
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const k = `${t.x + dx},${t.y + dy}`
-      if (parent.has(k)) continue
-      const n = byPos.get(k)
-      if (n && isRoad(n)) { parent.set(k, `${t.x},${t.y}`); queue.push(n) }
-    }
-  }
-  const routes: Route[] = []
-  for (const p of map.plots) {
-    // auto jezdí, dokud má budova co odvážet: výroba i plný sklad (= čeká na odvoz)
-    if (!p.b_id || (p.b_status !== 'producing' && p.b_status !== 'full') || !p.connected) continue
-    if (routes.length >= 40) break
-    let entry: string | null = null
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const k = `${p.x + dx},${p.y + dy}`
-      if (parent.has(k)) { entry = k; break }
-    }
-    if (!entry) continue
-    const pts: Pt[] = [tileCenter(p.x, p.y)]
-    let cur: string | null = entry
-    while (cur) {
-      const [x, y] = [Number(cur.split(',')[0]), Number(cur.split(',')[1])]
-      pts.push(tileCenter(x, y))
-      cur = parent.get(cur) ?? null
-    }
-    pts.reverse() // od hlavního tahu k budově
-    const r = toRoute(pts)
-    if (r.len > 1) routes.push(r)
-  }
-  return routes
 }
 
 /** Nákladní loď: trup, paluba s kontejnery, kabina a brázda ve vodě. */
@@ -391,99 +355,44 @@ function Ship({ g }: { g: React.RefObject<SVGGElement | null> }) {
   )
 }
 
-/**
- * Lodní trasy: řeky jsou souvislé vodní cesty. Pro dvě největší řeky
- * spočteme „průměr“ (nejdelší rozumnou trasu) a po ní posíláme lodě;
- * přístavy přidávají vlastní spoj od svého nábřeží ke vzdálenému konci řeky.
- */
-function buildShipRoutes(map: MapData): Route[] {
-  const water = map.plots.filter((p) => p.type === 'water')
-  if (water.length === 0) return []
-  const byPos = new Map<string, MapPlot>()
-  for (const w of water) byPos.set(`${w.x},${w.y}`, w)
-
-  const bfs = (start: MapPlot) => {
-    const parent = new Map<string, string | null>([[`${start.x},${start.y}`, null]])
-    const dist = new Map<string, number>([[`${start.x},${start.y}`, 0]])
-    const q: MapPlot[] = [start]
-    let far = start
-    let farD = 0
-    while (q.length > 0) {
-      const t = q.shift()!
-      const d0 = dist.get(`${t.x},${t.y}`)!
-      if (d0 > farD) { farD = d0; far = t }
-      for (const [dx, dy] of N4) {
-        const k = `${t.x + dx},${t.y + dy}`
-        if (parent.has(k)) continue
-        const n = byPos.get(k)
-        if (n) { parent.set(k, `${t.x},${t.y}`); dist.set(k, d0 + 1); q.push(n) }
-      }
-    }
-    return { far, parent }
-  }
-  const trace = (endKey: string, parent: Map<string, string | null>) => {
-    const pts: Pt[] = []
-    let cur: string | null = endKey
-    while (cur) {
-      const parts = cur.split(',')
-      pts.push(tileCenter(Number(parts[0]), Number(parts[1])))
-      cur = parent.get(cur) ?? null
-    }
-    return pts
-  }
-
-  // komponenty souvislosti vodní sítě
-  const seen = new Set<string>()
-  const comps: MapPlot[][] = []
-  for (const w of water) {
-    const k0 = `${w.x},${w.y}`
-    if (seen.has(k0)) continue
-    const comp: MapPlot[] = []
-    const q: MapPlot[] = [w]
-    seen.add(k0)
-    while (q.length > 0) {
-      const t = q.shift()!
-      comp.push(t)
-      for (const [dx, dy] of N4) {
-        const k = `${t.x + dx},${t.y + dy}`
-        if (seen.has(k)) continue
-        const n = byPos.get(k)
-        if (n) { seen.add(k); q.push(n) }
-      }
-    }
-    comps.push(comp)
-  }
-  comps.sort((a, b) => b.length - a.length)
-
-  const routes: Route[] = []
-  for (const comp of comps.slice(0, 2)) {
-    const { far } = bfs(comp[0])
-    const { far: end, parent } = bfs(far)
-    const r = toRoute(trace(`${end.x},${end.y}`, parent))
-    r.kind = 'ship'
-    if (r.len > 40) routes.push(r)
-  }
-  // přístavní spoj: od nábřeží přístavu ke vzdálenému konci řeky
-  for (const h of map.plots.filter((x) => x.b_code === 'harbor').slice(0, 4)) {
-    const entry = N4.map(([dx, dy]) => byPos.get(`${h.x + dx},${h.y + dy}`))
-      .find((n) => n !== undefined)
-    if (!entry) continue
-    const { far, parent } = bfs(entry)
-    const r = toRoute(trace(`${far.x},${far.y}`, parent))
-    r.kind = 'ship'
-    if (r.len > 20) routes.push(r)
-  }
-  return routes
+function pointAt(lane: Lane, t: number): Pt {
+  const d = t * lane.len
+  let i = 1
+  while (i < lane.cum.length - 1 && lane.cum[i] < d) i++
+  const seg = lane.cum[i] - lane.cum[i - 1] || 1
+  const f = (d - lane.cum[i - 1]) / seg
+  const a = lane.pts[i - 1]; const b = lane.pts[i]
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f }
 }
 
-/** Vrstva aut: rAF smyčka posouvá dodávky po trasách (ping-pong tam a zpět). */
-function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number }) {
-  const routes = useMemo(
-    () => [...buildRoutes(map), ...buildShipRoutes(map)],
-    [map],
-  )
+/** Rychlost v „oběhzích za milisekundu“ při 1× — lodě jsou pomalejší než auta. */
+const LANE_RATE = { truck: 0.000045, ship: 0.00002 } as const
+
+function TrafficLayer({ routes, clockSpeed }: {
+  routes: TransportRoute[]; clockSpeed: number
+}) {
+  const lanes = useMemo(() => {
+    const out: Lane[] = []
+    for (const r of routes) {
+      if (r.status !== 'active') continue
+      const l = laneFrom(r.path, r.mode, r.vehicles)
+      if (l) out.push(l)
+    }
+    return out
+  }, [routes])
+
   const refs = useRef<Array<React.RefObject<SVGGElement | null>>>([])
-  refs.current = routes.map((_, i) => refs.current[i] ?? { current: null })
+  const vehicles = useMemo(() => {
+    const list: { lane: Lane; phase: number }[] = []
+    lanes.forEach((lane) => {
+      for (let v = 0; v < lane.vehicles; v++) {
+        list.push({ lane, phase: v / lane.vehicles })
+      }
+    })
+    return list
+  }, [lanes])
+  refs.current = vehicles.map((_, i) => refs.current[i] ?? { current: null })
+
   const speedRef = useRef(clockSpeed)
   speedRef.current = clockSpeed
 
@@ -492,28 +401,40 @@ function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number })
     let last = performance.now()
     let clock = 0
     const step = (now: number) => {
-      const dt = now - last
+      const dt = Math.min(64, now - last)
       last = now
       clock += dt * speedRef.current   // 0 = pauza → doprava stojí
-      routes.forEach((r, i) => {
+      vehicles.forEach((v, i) => {
         const el = refs.current[i]?.current
         if (!el) return
-        const rate = r.kind === 'ship' ? 0.000028 : 0.00006
-        const u = (clock * rate + i * 0.37) % 2
-        const t = u < 1 ? u : 2 - u
-        const p = pointAt(r, t)
+        // JEDNOSMĚRNÝ okruh: žádné vracení na start, plynulá smyčka
+        const t = (clock * LANE_RATE[v.lane.kind] + v.phase) % 1
+        const p = pointAt(v.lane, t)
         el.setAttribute('transform', `translate(${p.x.toFixed(1)},${(p.y - 2).toFixed(1)})`)
       })
       raf = requestAnimationFrame(step)
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [routes])
+  }, [vehicles])
 
-  if (routes.length === 0) return null
+  if (lanes.length === 0) return null
   return (
     <g className="traffic" pointerEvents="none">
-      {routes.map((r, i) => (r.kind === 'ship'
+      {/* vyznačené trasy: hráč vidí, kudy jeho vozy jezdí */}
+      {lanes.map((l, i) => (
+        <polyline
+          key={`lane-${i}`}
+          points={l.pts.map((p) => `${p.x},${p.y}`).join(' ')}
+          fill="none"
+          stroke={l.kind === 'ship' ? '#7fb2e5' : '#e8c07a'}
+          strokeOpacity={0.34}
+          strokeWidth={2}
+          strokeDasharray="6 5"
+          strokeLinecap="round"
+        />
+      ))}
+      {vehicles.map((v, i) => (v.lane.kind === 'ship'
         ? <Ship key={i} g={refs.current[i]} />
         : <Truck key={i} g={refs.current[i]} />))}
     </g>
@@ -529,7 +450,9 @@ function TrafficLayer({ map, clockSpeed }: { map: MapData; clockSpeed: number })
  * K velkému světu (40×20 = 800 pozemků) patří ovládání kamery: kolečko = zoom
  * na kurzor, tažení = posun, dvojklik / tlačítko ⤢ = celý svět.
  */
-export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlot, clockSpeed }: Props) {
+export default function WorldMap({
+  map, myCompanyId, selectedPlotId, onSelectPlot, clockSpeed, routes,
+}: Props) {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [view, setView] = useState<View | null>(null)
@@ -658,7 +581,7 @@ export default function WorldMap({ map, myCompanyId, selectedPlotId, onSelectPlo
           />
         ))}
 
-        {map && <TrafficLayer map={map} clockSpeed={clockSpeed} />}
+        <TrafficLayer routes={routes} clockSpeed={clockSpeed} />
       </svg>
 
       <div className="map-tools">

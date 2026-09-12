@@ -40,6 +40,9 @@ export async function getDb(): Promise<PGliteType> {
     console.log(`  ✅ migrace 0001_init.sql aplikována (${countStatements(sql)} statementů)`)
   } else {
     console.log('  ℹ️  schéma už existuje, migrace přeskočena')
+    // Persistentní PGDATA z dřívějška může znát jen starší schéma — nové
+    // tabule doplňujeme idempotentně při každém startu.
+    await db.exec(await readFile(resolve(HERE, '../../../db/migrations/0002_ensure.sql'), 'utf8'))
   }
   return db
 }

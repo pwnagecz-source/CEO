@@ -234,6 +234,41 @@ check('mapa hlásí napojení', mapd.plots.some((p) => p.connected === true), tr
 }
 check('audit PASS po Fázi D', (await j('/audit')).verdict, 'PASS')
 
+// ── Cargo: hráčské dopravní trasy ────────────────────────────────────────────
+console.log(`\n[15] cargo — trasy, které si zakládá hráč`)
+const rts = await j('/routes?companyId=1')
+check('demo firma má ukázkové trasy (≥2)', rts.routes.length >= 2, true)
+const r0 = rts.routes[0]
+check('trasa má uloženou cestu po dlaždicích', Array.isArray(r0.path) && r0.path.length >= 2, true)
+check('trasa má kapacitu a přepravné', (r0.capacityPerHour > 0) && (r0.feePerHour > 0), true)
+
+// firma 2 (Borealis) má dvě budovy u tahu — musí jít založit truck trasa
+const mapR = await j('/map')
+const b2 = mapR.plots.filter((p) => p.owner_id === '2' && p.b_id)
+check('firma 2 má ≥2 budovy pro trasu', b2.length >= 2, true)
+const [fa, fb] = b2
+const q = await post('/routes/quote', { companyId: 2, fromPlotId: Number(fa.id), toPlotId: Number(fb.id) })
+check('nabídka trasy: 200 a mód truck', q.status === 200 && q.body.modes.some((m) => m.mode === 'truck'), true)
+const qBad = await post('/routes/quote', { companyId: 2, fromPlotId: Number(fa.id), toPlotId: Number(fa.id) })
+check('trasa sama na sebe → 422', qBad.status, 422)
+
+const cashBefore = (await j('/companies/2')).cash
+const cr = await post('/routes', { companyId: 2, fromPlotId: Number(fa.id), toPlotId: Number(fb.id), mode: 'truck', vehicles: 3 })
+check('trasa jde založit', cr.status, 200)
+const cashAfter = (await j('/companies/2')).cash
+// 3× truck = 750 Kč setup; tick může mezitím strhnout údržbu (do ~150)
+check('vozový park (750) se odečetl z cash', cashBefore - cashAfter >= 750 && cashBefore - cashAfter < 950, true)
+const dup = await post('/routes', { companyId: 2, fromPlotId: Number(fa.id), toPlotId: Number(fb.id), mode: 'truck', vehicles: 1 })
+check('duplicitní trasa → 422', dup.status, 422)
+const delR = await del(`/routes/${cr.body.id}?companyId=2`)
+check('trasa jde smazat', delR.status, 200)
+const del2 = await del(`/routes/${cr.body.id}?companyId=2`)
+check('smazání cizí/neexistující trasy → 404', del2.status, 404)
+check('audit PASS po cargo sekci', (await j('/audit')).verdict, 'PASS')
+const mbr = await j('/macro')
+check('M2 identita drží i po setup poplatcích',
+  Math.abs(mbr.m2 - (mbr.moneyCreated - mbr.moneyDestroyed)) < 0.01, true)
+
 console.log('\n────────────────────────────────────────────────────────────')
 console.log(` ${pass} ✅   ${fail} ❌   →  ${fail === 0 ? 'VŠECHNO PROŠLO' : 'MÁME PROBLÉM'}`)
 console.log('────────────────────────────────────────────────────────────\n')

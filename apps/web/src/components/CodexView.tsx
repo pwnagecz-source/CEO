@@ -160,6 +160,22 @@ export default function CodexView({ recipes, inputs, catalog, onBack }: Props) {
               +1 000 skladu) postavíš jen u vody — lodě na řece vozí tvé zboží
               a nábřežní parcely jsou proto dražší než vnitrozemí.
             </p>
+            <h2>Cargo: vlastní dopravní trasy</h2>
+            <p>
+              Nic nejezdí samo od sebe — dopravu si zakládáš: u své budovy klikni
+              <strong> „🚚 Vézt zboží odsud…“</strong> a pak vyber cílovou budovu.
+              Hra nabídne 🚚 silniční nebo 🚢 říční trasu, zvolíš počet vozidel
+              (každé = kapacita navíc) a zaplatíš vozový park. Vozy pak jezdí po
+              tvé trase a každý tick převážejí zboží ze dvora odkud do dvora kam.
+              <strong> Přepravné platíš jen za skutečně svezené zboží</strong> —
+              trasa, po které nic nejede, tě nic nestojí.
+            </p>
+            <p>
+              Proč na tom záleží: každá budova má vlastní malý dvorec a když se
+              naplní, přestane vyrábět (stav <strong>„sklad plný“</strong>).
+              Trasa do skladu ji udržuje v běhu — tohle je ta pravá logistická
+              smyčka hry.
+            </p>
             <h2>Čas</h2>
             <p>
               Svět má viditelný čas: jeden tick = jedna herní hodina. Tlačítky

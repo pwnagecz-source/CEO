@@ -9,6 +9,7 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { closeDb, getDb, many, one, tx } from './db.ts'
 import { audit, balance, macroSnapshot } from './ledger.ts'
+import { createRoute, deleteRoute, listRoutes, quoteRoute } from './transport.ts'
 import {
   FEE_MAKER, FEE_TAKER, MarketError, cancelOrder, openOrders, orderBook,
   placeOrder, recentTrades, type Side,
@@ -517,6 +518,70 @@ async function boot() {
       try {
         return await tx((t) =>
           hireRoadBuilders(t, worldId, Number(req.body?.companyId), Number(req.params.id)))
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  // ------------------------------------------------------------ doprava ---
+  /** Nabídka trasy: jaké druhy dopravy spojují dvě mé budovy, za kolik. */
+  app.post<{ Body: { companyId: number; fromPlotId: number; toPlotId: number } }>(
+    '/api/routes/quote', async (req, reply) => {
+      const b = req.body
+      if (!b || !b.fromPlotId || !b.toPlotId || !b.companyId) {
+        return reply.code(400).send({ error: 'companyId, fromPlotId a toPlotId jsou povinné' })
+      }
+      try {
+        const q = await quoteRoute(db, worldId, Number(b.companyId),
+                                   Number(b.fromPlotId), Number(b.toPlotId))
+        return {
+          from: { x: q.from.x, y: q.from.y, building: q.from.building },
+          to: { x: q.to.x, y: q.to.y, building: q.to.building },
+          modes: q.modes,
+        }
+      } catch (e) {
+        if (e instanceof MarketError) {
+          return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+        }
+        throw e
+      }
+    })
+
+  /** Založení trasy: koupí vozy/lokality (sink_transport) a začne vozit. */
+  app.post<{ Body: {
+    companyId: number; fromPlotId: number; toPlotId: number
+    mode: string; vehicles: number
+  } }>('/api/routes', async (req, reply) => {
+    const b = req.body
+    if (!b || !b.fromPlotId || !b.toPlotId || !b.companyId
+        || (b.mode !== 'truck' && b.mode !== 'ship')) {
+      return reply.code(400).send({ error: 'companyId, fromPlotId, toPlotId a mode (truck|ship) jsou povinné' })
+    }
+    try {
+      const mode = b.mode === 'ship' ? 'ship' as const : 'truck' as const
+      return await tx((t) => createRoute(t, worldId, Number(b.companyId),
+        Number(b.fromPlotId), Number(b.toPlotId), mode, Number(b.vehicles ?? 1)))
+    } catch (e) {
+      if (e instanceof MarketError) {
+        return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })
+      }
+      throw e
+    }
+  })
+
+  app.get<{ Querystring: { companyId: string } }>('/api/routes', async (req) => ({
+    routes: await listRoutes(db, worldId, Number(req.query.companyId)),
+  }))
+
+  app.delete<{ Params: { id: string }; Querystring: { companyId: string } }>(
+    '/api/routes/:id', async (req, reply) => {
+      try {
+        await tx((t) => deleteRoute(t, worldId, Number(req.query.companyId),
+                                    Number(req.params.id)))
+        return { ok: true }
       } catch (e) {
         if (e instanceof MarketError) {
           return reply.code(statusForMarketError(e)).send({ error: e.message, code: e.code })

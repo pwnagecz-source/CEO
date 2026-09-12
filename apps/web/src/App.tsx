@@ -3,7 +3,8 @@ import {
   ApiError, api,
   type Audit, type Book, type CatalogRow, type Clock, type CodexInput, type CodexRecipe,
   type Company, type CompanySummary, type Item, type Macro, type MapData, type MapPlot,
-  type OpenOrder, type PlaceOrderResult, type QuestState, type RoadQuote, type Trade,
+  type OpenOrder, type PlaceOrderResult, type QuestState, type RoadQuote,
+  type RouteMode, type RouteQuoteResult, type Trade, type TransportRoute,
 } from './api'
 import CodexView from './components/CodexView'
 import GameView from './components/GameView'
@@ -47,6 +48,11 @@ export default function App() {
   const [codex, setCodex] = useState<{ recipes: CodexRecipe[]; inputs: CodexInput[] } | null>(null)
   const [roadQuote, setRoadQuote] = useState<RoadQuote | null>(null)
   const [selectedPlot, setSelectedPlot] = useState<MapPlot | null>(null)
+  // Cargo: hráčské dopravní trasy + rozpracovaná trasa (odkaz → cíl)
+  const [routes, setRoutes] = useState<TransportRoute[]>([])
+  const [routeFrom, setRouteFrom] = useState<MapPlot | null>(null)
+  const [routeQuote, setRouteQuote] = useState<RouteQuoteResult | null>(null)
+  const [routeQuoteErr, setRouteQuoteErr] = useState<string | null>(null)
   // Výchozí pohled je HRA. Terminál (expertní) je na jedno kliknutí, ale není to
   // první věc, kterou nový hráč uvidí.
   const [mode, setMode] = useState<'game' | 'terminal' | 'codex'>('game')
@@ -91,14 +97,16 @@ export default function App() {
       const cid = companyId ?? cos.companies[0]?.id ?? null
       if (cid) {
         setCompanyId(cid)
-        const [co, oo, qs] = await Promise.all([
-          api.company(cid), api.orders(cid), api.quests(cid),
+        const [co, oo, qs, rt] = await Promise.all([
+          api.company(cid), api.orders(cid), api.quests(cid), api.routes(cid),
         ])
         setCompany(co)
         setOrders(oo.orders)
         setQuests(qs)
+        setRoutes(rt.routes)
       } else {
         setQuests(null)
+        setRoutes([])
       }
 
       const code = it.items.some((x) => x.code === itemCode) ? itemCode : DEFAULT_ITEM
@@ -173,6 +181,19 @@ export default function App() {
     await api.hireRoad(p.id, companyId)
   })
 
+  const createTransportRoute = (to: MapPlot, mode: RouteMode, vehicles: number) =>
+    void gameAction('Vozový park vyráží…', async () => {
+      if (!companyId || !routeFrom) throw new ApiError(400, null, 'Nejdřív vyber odkud')
+      await api.createRoute(companyId, routeFrom.id, to.id, mode, vehicles)
+      setRouteFrom(null)
+      setRouteQuote(null)
+    })
+
+  const removeRoute = (id: string) => void gameAction('Ruším trasu…', async () => {
+    if (!companyId) throw new ApiError(400, null, 'Nejdřív založ firmu')
+    await api.deleteRoute(id, companyId)
+  })
+
   async function setSpeed(speed: number) {
     try {
       await api.setClock(speed)
@@ -181,6 +202,24 @@ export default function App() {
       setActErr(e instanceof ApiError ? e.message : String(e))
     }
   }
+
+  // Nabídka cargo trasy: když mám rozpracovaný odkaz a vybraný cíl (moje budova).
+  useEffect(() => {
+    let alive = true
+    setRouteQuote(null)
+    setRouteQuoteErr(null)
+    if (!routeFrom || !companyId || !selectedPlot
+        || selectedPlot.id === routeFrom.id || selectedPlot.owner_id !== companyId
+        || !selectedPlot.b_id) {
+      return () => { alive = false }
+    }
+    api.routeQuote(companyId, routeFrom.id, selectedPlot.id)
+      .then((q) => { if (alive) setRouteQuote(q) })
+      .catch((e) => {
+        if (alive) setRouteQuoteErr(e instanceof ApiError ? e.message : String(e))
+      })
+    return () => { alive = false }
+  }, [routeFrom, selectedPlot, companyId])
 
   // Cena napojení: dopočítávám jen když má smysl (vlastní nenapojená budova).
   useEffect(() => {
@@ -298,6 +337,13 @@ export default function App() {
         quests={quests}
         clock={clock}
         roadQuote={roadQuote}
+        routes={routes}
+        routeFrom={routeFrom}
+        routeQuote={routeQuote}
+        routeQuoteErr={routeQuoteErr}
+        onRouteFrom={(p) => setRouteFrom(p)}
+        onCreateRoute={createTransportRoute}
+        onDeleteRoute={removeRoute}
         busy={actBusy}
         err={actErr}
       />

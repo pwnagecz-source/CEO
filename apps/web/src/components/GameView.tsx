@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import type {
   Audit, CatalogRow, Clock, Company, Macro, MapData, MapPlot, QuestState, RoadQuote,
+  RouteMode, RouteQuoteResult, TransportRoute,
 } from '../api'
 import { compact, money, pct } from '../fmt'
 import { STATUS_GLOW, TERRAIN, terrainFor } from '../game/art'
@@ -29,6 +31,13 @@ type Props = {
   quests: QuestState | null
   clock: Clock | null
   roadQuote: RoadQuote | null
+  routes: TransportRoute[]
+  routeFrom: MapPlot | null
+  routeQuote: RouteQuoteResult | null
+  routeQuoteErr: string | null
+  onRouteFrom: (p: MapPlot | null) => void
+  onCreateRoute: (to: MapPlot, mode: RouteMode, vehicles: number) => void
+  onDeleteRoute: (id: string) => void
   busy: string | null
   err: string | null
 }
@@ -45,9 +54,21 @@ const STATUS_LABEL: Record<string, string> = {
 export default function GameView({
   map, catalog, company, companies, companyId, onSelectCompany, macro, audit,
   selectedPlot, onSelectPlot, onBuy, onBuild, onNewCompany, onOpenTerminal, onQuickSell,
-  onHireRoad, onOpenCodex, onSpeed, quests, clock, roadQuote, busy, err,
+  onHireRoad, onOpenCodex, onSpeed, quests, clock, roadQuote,
+  routes, routeFrom, routeQuote, routeQuoteErr, onRouteFrom, onCreateRoute, onDeleteRoute,
+  busy, err,
 }: Props) {
   const terminalLocked = quests !== null && !quests.terminalUnlocked
+  // Cargo formulář: vybraný druh dopravy a počet vozidel pro aktuální nabídku.
+  const [rMode, setRMode] = useState<RouteMode>('truck')
+  const [rVehicles, setRVehicles] = useState(1)
+  useEffect(() => {
+    if (routeQuote) {
+      setRMode(routeQuote.modes[0]?.mode ?? 'truck')
+      setRVehicles(1)
+    }
+  }, [routeQuote])
+  const offer = routeQuote?.modes.find((m) => m.mode === rMode) ?? routeQuote?.modes[0]
   const myPlots = map?.plots.filter((p) => p.owner_id === companyId) ?? []
   const myBuildings = myPlots.filter((p) => p.b_id)
   const cash = company?.cash ?? 0
@@ -130,7 +151,15 @@ export default function GameView({
             selectedPlotId={selectedPlot?.id ?? null}
             onSelectPlot={onSelectPlot}
             clockSpeed={clock?.speed ?? 1}
+            routes={routes}
           />
+          {routeFrom && (
+            <div className="route-draft">
+              🚚 Trasa z <strong>{routeFrom.b_name ?? `[${routeFrom.x},${routeFrom.y}]`}</strong> —
+              klikni na cílovou budovu
+              <button className="ghost" onClick={() => onRouteFrom(null)}>✕ zrušit</button>
+            </div>
+          )}
           <div className="map-legend">
             {Object.entries(TERRAIN).filter(([k]) => k !== 'unowned').map(([k, t]) => (
               <span key={k} className="lg">
@@ -203,6 +232,17 @@ export default function GameView({
                     <i className="dot" style={{ background: STATUS_GLOW[selectedPlot.b_status ?? 'idle'] }} />
                     {STATUS_LABEL[selectedPlot.b_status ?? 'idle'] ?? selectedPlot.b_status}
                   </div>
+                  <div className="insp-cargo-btns">
+                    {routeFrom?.id === selectedPlot.id ? (
+                      <button className="ghost wide" onClick={() => onRouteFrom(null)}>
+                        ✕ Zrušit výběr odkud
+                      </button>
+                    ) : (
+                      <button className="ghost wide" onClick={() => onRouteFrom(selectedPlot)}>
+                        🚚 Vézt zboží odsud…
+                      </button>
+                    )}
+                  </div>
                   <table className="insp-table">
                     <tbody>
                       <tr><td className="dim">Úroveň</td><td>{selectedPlot.b_level}</td></tr>
@@ -254,8 +294,78 @@ export default function GameView({
                 </div>
               )}
 
+              {routeFrom && routeFrom.id !== selectedPlot.id && (
+                <div className="insp-cargo">
+                  <h3>🚚 Nová trasa</h3>
+                  <p className="dim">
+                    {routeFrom.b_name} → {selectedPlot.b_name ?? 'cíl'}
+                  </p>
+                  {routeQuoteErr && <div className="insp-err">{routeQuoteErr}</div>}
+                  {offer && (
+                    <>
+                      <div className="cargo-modes">
+                        {routeQuote?.modes.map((m) => (
+                          <button key={m.mode}
+                            className={'cargo-mode' + (offer.mode === m.mode ? ' is-sel' : '')}
+                            onClick={() => setRMode(m.mode)}>
+                            {m.mode === 'truck' ? '🚚 po silnici' : '🚢 po vodě'}
+                            <span className="dim">{m.distance} dl.</span>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="cargo-vehicles">
+                        <span className="dim">Vozidel:</span>
+                        <button className="btn btn--sm" disabled={rVehicles <= 1}
+                          onClick={() => setRVehicles((n) => n - 1)}>−</button>
+                        <strong>{rVehicles}×</strong>
+                        <button className="btn btn--sm" disabled={rVehicles >= 8}
+                          onClick={() => setRVehicles((n) => n + 1)}>＋</button>
+                      </div>
+                      <table className="insp-table">
+                        <tbody>
+                          <tr><td className="dim">Kapacita</td>
+                            <td>{offer.capacityPerHour * rVehicles} ks/h</td></tr>
+                          <tr><td className="dim">Přepravné</td>
+                            <td>{money(offer.feePerHour * rVehicles)}/h při plném naložení</td></tr>
+                          <tr><td className="dim">Vozový park</td>
+                            <td>{money(offer.setupPerVehicle * rVehicles)} jednorázově</td></tr>
+                        </tbody>
+                      </table>
+                      <button className="btn btn--primary wide" disabled={!!busy}
+                        onClick={() => onCreateRoute(selectedPlot, offer.mode, rVehicles)}>
+                        Založit trasu · {money(offer.setupPerVehicle * rVehicles)}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
               <button className="ghost wide" onClick={() => onSelectPlot(null)}>Zavřít</button>
             </>
+          )}
+
+          {routes.length > 0 && (
+            <div className="insp-routes">
+              <h3>🚚 Tvoje trasy ({routes.length})</h3>
+              {routes.map((r) => (
+                <div key={r.id} className="route-row">
+                  <span className="route-row__icon">{r.mode === 'truck' ? '🚚' : '🚢'}</span>
+                  <span className="route-row__name">
+                    {r.from.building ?? '?'} → {r.to.building ?? '?'}
+                    <span className="dim">
+                      {' '}{r.vehicles}× · {r.distance} dl · {compact(r.capacityPerHour)} ks/h ·
+                      svezeno {compact(r.hauledTotal)} ks
+                    </span>
+                  </span>
+                  <button className="btn btn--sm" disabled={!!busy} title="Zrušit trasu"
+                    onClick={() => onDeleteRoute(r.id)}>✕</button>
+                </div>
+              ))}
+              <p className="dim">
+                Přepravné se platí jen za skutečně svezené zboží. Trasa vyprázdní
+                plný sklad — proto se vyplatí vézt z dolu/tábora do skladu či obchodu.
+              </p>
+            </div>
           )}
 
           {(company?.inventory ?? []).some((r) => r.available > 0) && (

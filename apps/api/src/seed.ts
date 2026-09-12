@@ -11,6 +11,7 @@ import type { Db } from './db.ts'
 import { many, one } from './db.ts'
 import { post, round6, type AccountKind } from './ledger.ts'
 import { FEE_MIN, FEE_TAKER } from './market.ts'
+import { createRoute } from './transport.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SEED_PATH = resolve(HERE, '../../../seed/balance-v0.2.json')
@@ -502,6 +503,62 @@ async function seedDemoCompanies(
 
   // počáteční likvidita v order booku, aby nový hráč mohl okamžitě obchodovat
   await placeSeedOrders(d, worldId, itemId, companyIds)
+
+  // Ukázkový logistický okruh Tvé Firmy: sklad u tahu + dvě trasy do něj.
+  // Bez skladu by se tábor i pila ucpaly v malých dvorcích (status `full`)
+  // a nový hráč by místo jezdících náklaďáků viděl mrtvý svět.
+  const demoCo = companyIds[0]
+  if (demoCo !== undefined) {
+    const anchor = HOME_ANCHORS[0] ?? { x: 10, y: 9 }
+    const wp = await one<{ id: string }>(
+      d,
+      `SELECT p.id::text FROM plots p
+        WHERE p.world_id = $1 AND p.plot_type = 'industrial' AND p.status = 'unowned'
+          AND EXISTS (SELECT 1 FROM plots n
+                       WHERE n.world_id = $1 AND n.plot_type = 'road'
+                         AND abs(n.x - p.x) + abs(n.y - p.y) = 1)
+        ORDER BY (p.x - $2) * (p.x - $2) + (p.y - $3) * (p.y - $3)
+        LIMIT 1`,
+      [worldId, anchor.x, anchor.y],
+    )
+    if (wp && buildingTypeId['warehouse'] !== undefined) {
+      await d.query(
+        `UPDATE plots SET status='owned', owner_company_id=$1, acquired_at=now(),
+                          acquired_for=0 WHERE id=$2`,
+        [demoCo, Number(wp.id)],
+      )
+      await d.query(
+        `INSERT INTO buildings (world_id, company_id, plot_id, type_id, level, status,
+                                completed_at, last_settled_at)
+         VALUES ($1,$2,$3,$4,1,'idle',now(),now())`,
+        [worldId, demoCo, Number(wp.id), buildingTypeId['warehouse']],
+      )
+    }
+    const pick = async (code: string) => one<{ plot_id: string }>(
+      d,
+      `SELECT b.plot_id::text FROM buildings b
+         JOIN building_types bt ON bt.id = b.type_id
+        WHERE b.company_id=$1 AND bt.code=$2 LIMIT 1`,
+      [demoCo, code],
+    )
+    const camp = await pick('logging_camp')
+    const mill = await pick('sawmill')
+    const wh = await pick('warehouse')
+    let made = 0
+    for (const pair of [[camp, wh, 2], [mill, wh, 1]] as const) {
+      const [from, to, n] = pair
+      if (!from || !to) continue
+      try {
+        await createRoute(d, worldId, demoCo, Number(from.plot_id),
+                          Number(to.plot_id), 'truck', n)
+        made++
+      } catch (e) {
+        console.log('  ⚠️  seed: ukázková trasa nevznikla:',
+          e instanceof Error ? e.message : e)
+      }
+    }
+    if (made > 0) console.log(`  🚚 seed: ukázkové cargo trasy (${made}) do skladu`)
+  }
 
   return companyIds
 }

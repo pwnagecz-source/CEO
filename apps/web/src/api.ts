@@ -146,6 +146,37 @@ export type CodexInput = { recipe: string; item: string; item_name: string; qty:
 
 export type RoadQuote = { tiles: number; cost: number; path: { id: string; x: number; y: number }[] }
 
+export type RouteMode = 'truck' | 'ship'
+
+export type TransportRoute = {
+  id: string
+  from: { plotId: number; x: number; y: number; building: string | null }
+  to: { plotId: number; x: number; y: number; building: string | null }
+  mode: RouteMode
+  vehicles: number
+  distance: number
+  path: { x: number; y: number }[]
+  feePerHour: number
+  capacityPerHour: number
+  hauledTotal: number
+  status: string
+}
+
+export type RouteModeQuote = {
+  mode: RouteMode
+  distance: number
+  path: { x: number; y: number }[]
+  setupPerVehicle: number
+  feePerHour: number
+  capacityPerHour: number
+}
+
+export type RouteQuoteResult = {
+  from: { x: number; y: number; building: string | null }
+  to: { x: number; y: number; building: string | null }
+  modes: RouteModeQuote[]
+}
+
 export type CatalogRow = {
   code: string; name: string; industry: string; plot_type: string
   capex: number; upkeep_hour: number; throughput: number; storage: number
@@ -207,6 +238,21 @@ export const api = {
   setClock: (speed: number) =>
     req<{ speed: number }>('/clock', { method: 'POST', body: JSON.stringify({ speed }) }),
   codex: () => req<{ recipes: CodexRecipe[]; inputs: CodexInput[] }>('/codex'),
+  routes: (companyId: string | number) =>
+    req<{ routes: TransportRoute[] }>(`/routes?companyId=${companyId}`),
+  routeQuote: (companyId: string | number, fromPlotId: string | number, toPlotId: string | number) =>
+    req<RouteQuoteResult>('/routes/quote', {
+      method: 'POST',
+      body: JSON.stringify({ companyId: Number(companyId), fromPlotId: Number(fromPlotId),
+                             toPlotId: Number(toPlotId) }) }),
+  createRoute: (companyId: string | number, fromPlotId: string | number,
+                toPlotId: string | number, mode: RouteMode, vehicles: number) =>
+    req<TransportRoute>('/routes', {
+      method: 'POST',
+      body: JSON.stringify({ companyId: Number(companyId), fromPlotId: Number(fromPlotId),
+                             toPlotId: Number(toPlotId), mode, vehicles }) }),
+  deleteRoute: (routeId: string | number, companyId: string | number) =>
+    req<{ ok: boolean }>(`/routes/${routeId}?companyId=${companyId}`, { method: 'DELETE' }),
   roadQuote: (plotId: string | number, companyId: string | number) =>
     req<RoadQuote>(`/plots/${plotId}/road-quote?companyId=${companyId}`),
   hireRoad: (plotId: string | number, companyId: string | number) =>
