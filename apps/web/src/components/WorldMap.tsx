@@ -110,7 +110,7 @@ export default function WorldMap({
         <button className="map-tool" title="Celý svět" onClick={() => sceneRef.current?.resetView()}>⤢</button>
       </div>
       <div className="map-hint3d">
-        🖱️ táhni = posun · kolečko = zoom · pravé tlačítko = natočení
+        🖱️ táhni = posun · kolečko = zoom · pravé tlačítko = natočení · rev v4
       </div>
     </div>
   )
