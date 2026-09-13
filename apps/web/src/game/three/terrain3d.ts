@@ -87,15 +87,15 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const heightGF = (gx: number, gy: number): number => {
     const waterF = bil(tW, gx, gy), roadF = bil(tR, gx, gy), gradedF = bil(tG, gx, gy)
     const n = fbm(gx * 0.075, gy * 0.075, 7)
-    let h = (n - 0.5) * 1.35                        // vlnité kopce ±0.68
-    h += (fbm(gx * 0.21 + 5, gy * 0.21 + 5, 13) - 0.5) * 0.45
-    h += (fbm(gx * 0.55 + 9, gy * 0.55 + 2, 17) - 0.5) * 0.12
+    let h = (n - 0.5) * 2.0                         // vlnité kopce ±1.0
+    h += (fbm(gx * 0.21 + 5, gy * 0.21 + 5, 13) - 0.5) * 0.7
+    h += (fbm(gx * 0.55 + 9, gy * 0.55 + 2, 17) - 0.5) * 0.16
     if (gradedF > 0) h *= 1 - 0.8 * gradedF         // zastavěno = srovnaný pozemek
-    if (roadF > 0) h *= 1 - 0.95 * Math.min(1, roadF * 2)  // silnice v rovině
-    const lake = smooth(0.78, 0.9, fbm(gx * 0.035 + 140, gy * 0.035 - 60, 51))
+    if (roadF > 0) h *= 1 - 0.5 * Math.min(1, roadF * 2)   // silnice: jen zmírnit
+    // vnitrozemská jezera zrušena po feedbacku: voda „prosakovala“ všude;
+    // animovaná voda zůstává v příkopu kolem ostrova
     if (waterF >= 0.5) h = BED_Y + (n - 0.5) * 0.35         // příkop kolem ostrova
     else if (waterF >= 0.25) h = Math.min(h, -0.02) - 0.10  // břeh s pláží
-    else if (lake > 0) h = Math.min(h, h + (BED_Y + 0.1 - h) * lake)  // jezera
     else if (h < WATER_Y + 0.07) {                  // údolí: měkké dno nad vodou
       const t = WATER_Y + 0.07
       h = t + (h - t) * 0.12
@@ -122,10 +122,10 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const col = new Float32Array(cols * rows * 3)
   const hs = new Float32Array(cols * rows)
   const idx: number[] = []
-  const cGrass1 = new THREE.Color('#4f9048')
-  const cGrass2 = new THREE.Color('#6cae55')
-  const cDry = new THREE.Color('#9dad55')
-  const cDirt = new THREE.Color('#8a7150')
+  const cGrass1 = new THREE.Color('#3f8a3c')
+  const cGrass2 = new THREE.Color('#5aa344')
+  const cDry = new THREE.Color('#8fa04e')
+  const cDirt = new THREE.Color('#83684a')
   const cSand = new THREE.Color('#d3bf8e')
   const cRock = new THREE.Color('#87816f')
   const cSnow = new THREE.Color('#eef2f7')
@@ -156,9 +156,9 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
       const dry = fbm(gx * 0.12 + 3, gy * 0.12 + 55, 37)        // suchá tráva
       const rd = bil(tR, gx, gy)
       tmp.copy(cGrass1).lerp(cGrass2, vnoise(gx * 0.5, gy * 0.5, 41))
-      tmp.lerp(cDry, smooth(0.52, 0.78, dry) * 0.75)
-      tmp.lerp(cDirt, smooth(0.56, 0.8, patch) * 0.9)
-      tmp.lerp(cRock, smooth(0.16, 0.36, sl))
+      tmp.lerp(cDry, smooth(0.66, 0.84, dry) * 0.55)
+      tmp.lerp(cDirt, smooth(0.7, 0.88, patch) * 0.6)
+      tmp.lerp(cRock, smooth(0.35, 0.8, sl))
       if (rd > 0.01 && rd < 0.99) tmp.lerp(cGravel, Math.max(0, 0.72 - rd * 0.55))
       if (h > 4.2) tmp.lerp(cSnow, smooth(4.2, 6.6, h))
       if (h < 0.06 && h > WATER_Y - 0.22) tmp.lerp(cSand, smooth(WATER_Y - 0.18, 0.02, h) * 0.9)

@@ -292,9 +292,10 @@ export class WorldScene {
     }
     const tiles = [...roadSet].map((k) => k.split(',').map(Number) as [number, number])
     if (!tiles.length) return
-    const shoulderGeo = new THREE.BoxGeometry(TILE * 1.42, 0.05, TILE * 1.42)
-    const asphaltGeo = new THREE.BoxGeometry(TILE, 0.08, TILE)
-    const curbGeo = new THREE.BoxGeometry(TILE + 0.16, 0.06, TILE + 0.16)
+    const RD = 0.7                                  // hloubka desek náspu
+    const shoulderGeo = new THREE.BoxGeometry(TILE * 1.42, RD, TILE * 1.42)
+    const asphaltGeo = new THREE.BoxGeometry(TILE, RD, TILE)
+    const curbGeo = new THREE.BoxGeometry(TILE + 0.16, RD + 0.04, TILE + 0.16)
     const dashGeo = new THREE.BoxGeometry(0.46, 0.02, 0.09)
     shoulderGeo.userData.cached = true; asphaltGeo.userData.cached = true
     curbGeo.userData.cached = true; dashGeo.userData.cached = true
@@ -305,10 +306,16 @@ export class WorldScene {
     const dashes: { x: number; z: number; rot: number }[] = []
     tiles.forEach(([x, y], i) => {
       const pos = this.tilePos(x, y)
-      const h = this.terrain?.heightAt(pos.x, pos.z) ?? 0
-      shoulder.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, h + 0.02, pos.z))
-      asphalt.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, h + 0.075, pos.z))
-      curb.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, h + 0.045, pos.z))
+      const r = TILE / 2
+      const hc = this.terrain
+        ? Math.max(
+            this.terrain.heightAt(pos.x - r, pos.z - r), this.terrain.heightAt(pos.x + r, pos.z - r),
+            this.terrain.heightAt(pos.x - r, pos.z + r), this.terrain.heightAt(pos.x + r, pos.z + r),
+          )
+        : 0
+      shoulder.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, hc - RD / 2 - 0.02, pos.z))
+      asphalt.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, hc + 0.09 - RD / 2, pos.z))
+      curb.setMatrixAt(i, new THREE.Matrix4().makeTranslation(pos.x, hc + 0.05 - (RD + 0.04) / 2, pos.z))
       const ne = roadSet.has(`${x + 1},${y - 1}`); const sw = roadSet.has(`${x - 1},${y + 1}`)
       const nw = roadSet.has(`${x - 1},${y - 1}`); const se = roadSet.has(`${x + 1},${y + 1}`)
       const n = roadSet.has(`${x},${y - 1}`); const s = roadSet.has(`${x},${y + 1}`)
@@ -334,7 +341,7 @@ export class WorldScene {
       if (!ns && !ew) return
       if (((x * 7 + y * 13) % 4 + 4) % 4 !== 0) return
       const pos = this.tilePos(x, y)
-      const hh = this.terrain?.heightAt(pos.x, pos.z) ?? 0
+      const hh = this.roadTopY(pos.x, pos.z)
       if (ns) lamps.push({ x: pos.x + 1.18, z: pos.z, h: hh })
       else lamps.push({ x: pos.x, z: pos.z + 1.18, h: hh })
     })
@@ -357,7 +364,7 @@ export class WorldScene {
       const dm = new THREE.InstancedMesh(dashGeo, mat('#cfd3d8'), dashes.length)
       dashes.forEach((d, i) => {
         dm.setMatrixAt(i, new THREE.Matrix4().compose(
-          new THREE.Vector3(d.x, (this.terrain?.heightAt(d.x, d.z) ?? 0) + 0.125, d.z),
+          new THREE.Vector3(d.x, this.roadTopY(d.x, d.z) + 0.015, d.z),
           new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), d.rot),
           new THREE.Vector3(1, 1, 1),
         ))
@@ -433,6 +440,19 @@ export class WorldScene {
     g.add(box(t, 0.05, L, m, -L / 2, 0.04, 0))
     g.add(box(t, 0.05, L, m, L / 2, 0.04, 0))
     return g
+  }
+
+  /** horní hrana silničního náspu v bodě (max roh dlaždice + 0.09) */
+  private roadTopY(x: number, z: number) {
+    if (!this.terrain) return 0.09
+    const gx = Math.round(x / TILE + (this.grid.w - 1) / 2)
+    const gy = Math.round(z / TILE + (this.grid.h - 1) / 2)
+    const c = this.tilePos(gx, gy)
+    const r = TILE / 2
+    return Math.max(
+      this.terrain.heightAt(c.x - r, c.z - r), this.terrain.heightAt(c.x + r, c.z - r),
+      this.terrain.heightAt(c.x - r, c.z + r), this.terrain.heightAt(c.x + r, c.z + r),
+    ) + 0.09
   }
 
   /** y rámečku: nejvyšší roh pozemku + malý odstup → leží na terénu */
@@ -593,7 +613,7 @@ export class WorldScene {
       v.g.position.copy(this.tmpA)
       v.g.position.y = v.kind === 'ship'
         ? WATER_Y + 0.1 + Math.sin(t * 2 + v.off * 9) * 0.02
-        : (this.terrain?.heightAt(this.tmpA.x, this.tmpA.z) ?? 0) + 0.1
+        : this.roadTopY(this.tmpA.x, this.tmpA.z) + 0.02
       const dx = this.tmpB.x - this.tmpA.x
       const dz = this.tmpB.z - this.tmpA.z
       if (dx * dx + dz * dz > 1e-8) v.g.rotation.y = -Math.atan2(dz, dx)
