@@ -168,10 +168,10 @@ export async function seedIfEmpty(d: Db): Promise<{ worldId: number; seeded: boo
   const world = await one<{ id: string }>(
     d,
     `INSERT INTO worlds (code, name, season_no, status, starts_at, ends_at,
-                         plot_grid_w, plot_grid_h, starting_capital)
-     VALUES ($1,$2,1,'active',$3,$4,$5,$6,25000)
+                         plot_grid_w, plot_grid_h, starting_capital, sim_hours)
+     VALUES ($1,$2,1,'active',$3,$4,$5,$6,25000,$7)
      RETURNING id`,
-    [WORLD_CODE, 'Vývojový svět S01', now, ends, GRID_W, GRID_H],
+    [WORLD_CODE, 'Vývojový svět S01', now, ends, GRID_W, GRID_H, 10],
   )
   const worldId = Number(world!.id)
 

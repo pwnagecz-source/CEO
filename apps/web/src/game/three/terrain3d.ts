@@ -72,32 +72,31 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const toG = (x: number, z: number): [number, number] =>
     [x / TILE + (W - 1) / 2, z / TILE + (H - 1) / 2]
 
-  /** masky ze 4 sousedních dlaždic (vertex leží na rohu čtverice) */
-  const masks = (gx: number, gy: number) => {
-    let water = 0, road = 0, graded = 0
-    for (const [dx, dy] of [[0, 0], [-1, 0], [0, -1], [-1, -1]] as const) {
-      const t = tileType(gx + dx, gy + dy)
-      if (t === 'water') water++
-      if (t === 'road') road++
-      if (owned.has(`${gx + dx},${gy + dy}`)) graded++
-    }
-    return { water, road, graded }
+  /** bilineární sampling po-tileových masek → hladké flattenování pod dlaždici */
+  const bil = (f: (gx: number, gy: number) => number, gx: number, gy: number) => {
+    const ix = Math.floor(gx), iy = Math.floor(gy)
+    const fx = gx - ix, fy = gy - iy
+    const a = f(ix, iy), b = f(ix + 1, iy), c = f(ix, iy + 1), d = f(ix + 1, iy + 1)
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy
   }
+  const tW = (gx: number, gy: number) => (tileType(gx, gy) === 'water' ? 1 : 0)
+  const tR = (gx: number, gy: number) => (tileType(gx, gy) === 'road' ? 1 : 0)
+  const tG = (gx: number, gy: number) => (owned.has(`${gx},${gy}`) ? 1 : 0)
 
-  /** výška v mřížkových souřadnicích (dlaždice, i mimo hřiště) */
-  const heightG = (gx: number, gy: number): number => {
-    const { water, road, graded } = masks(gx, gy)
+  /** spojitá výška v mřížkových souřadnicích (dlaždice i mimo hřiště) */
+  const heightGF = (gx: number, gy: number): number => {
+    const waterF = bil(tW, gx, gy), roadF = bil(tR, gx, gy), gradedF = bil(tG, gx, gy)
     const n = fbm(gx * 0.075, gy * 0.075, 7)
     let h = (n - 0.5) * 1.35                        // vlnité kopce ±0.68
     h += (fbm(gx * 0.21 + 5, gy * 0.21 + 5, 13) - 0.5) * 0.45
     h += (fbm(gx * 0.55 + 9, gy * 0.55 + 2, 17) - 0.5) * 0.12
-    if (graded > 0) h *= 1 - 0.8 * (graded / 4)    // zastavěno = srovnaný pozemek
-    if (road > 0) h *= 1 - 0.95 * Math.min(1, road / 2)  // silnice v rovině
-    const lake = smooth(0.74, 0.86, fbm(gx * 0.05 + 140, gy * 0.05 - 60, 51))
-    if (water >= 2) h = BED_Y + (n - 0.5) * 0.35          // příkop kolem ostrova
-    else if (water === 1) h = Math.min(h, -0.02) - 0.10   // břeh s pláží
+    if (gradedF > 0) h *= 1 - 0.8 * gradedF         // zastavěno = srovnaný pozemek
+    if (roadF > 0) h *= 1 - 0.95 * Math.min(1, roadF * 2)  // silnice v rovině
+    const lake = smooth(0.78, 0.9, fbm(gx * 0.035 + 140, gy * 0.035 - 60, 51))
+    if (waterF >= 0.5) h = BED_Y + (n - 0.5) * 0.35         // příkop kolem ostrova
+    else if (waterF >= 0.25) h = Math.min(h, -0.02) - 0.10  // břeh s pláží
     else if (lake > 0) h = Math.min(h, h + (BED_Y + 0.1 - h) * lake)  // jezera
-    else if (h < WATER_Y + 0.07) {                        // údolí: měkké dno nad vodou
+    else if (h < WATER_Y + 0.07) {                  // údolí: měkké dno nad vodou
       const t = WATER_Y + 0.07
       h = t + (h - t) * 0.12
     }
@@ -112,18 +111,16 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
 
   const heightAt = (x: number, z: number) => {
     const [gx, gy] = toG(x, z)
-    const ix = Math.floor(gx), iy = Math.floor(gy)
-    const fx = gx - ix, fy = gy - iy
-    const a = heightG(ix, iy), b = heightG(ix + 1, iy)
-    const c = heightG(ix, iy + 1), d = heightG(ix + 1, iy + 1)
-    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy
+    return heightGF(gx, gy)
   }
 
   /* ── heightfield geometrie s vertex barvami ───────────────────────────── */
   const NX = W + EXT * 2, NY = H + EXT * 2
-  const cols = NX + 1, rows = NY + 1
+  const SUB = 2                                   // 2 vertexy na dlaždici = ostré barvy
+  const cols = NX * SUB + 1, rows = NY * SUB + 1
   const pos = new Float32Array(cols * rows * 3)
   const col = new Float32Array(cols * rows * 3)
+  const hs = new Float32Array(cols * rows)
   const idx: number[] = []
   const cGrass1 = new THREE.Color('#4f9048')
   const cGrass2 = new THREE.Color('#6cae55')
@@ -138,26 +135,40 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
 
   for (let iy = 0; iy < rows; iy++) {
     for (let ix = 0; ix < cols; ix++) {
-      const gx = ix - EXT, gy = iy - EXT
-      const h = heightG(gx, gy)
-      const x = (gx - (W - 1) / 2) * TILE
-      const z = (gy - (H - 1) / 2) * TILE
+      const gx = ix / SUB - EXT, gy = iy / SUB - EXT
+      const h = heightGF(gx, gy)
       const i = iy * cols + ix
-      pos[i * 3] = x; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z
-      // sklon pro skálu
-      const sl = Math.abs(heightG(gx + 1, gy) - h) + Math.abs(heightG(gx, gy + 1) - h)
+      hs[i] = h
+      pos[i * 3] = (gx - (W - 1) / 2) * TILE
+      pos[i * 3 + 1] = h
+      pos[i * 3 + 2] = (gy - (H - 1) / 2) * TILE
+    }
+  }
+  for (let iy = 0; iy < rows; iy++) {
+    for (let ix = 0; ix < cols; ix++) {
+      const gx = ix / SUB - EXT, gy = iy / SUB - EXT
+      const i = iy * cols + ix
+      const h = hs[i]
+      // sklon pro skálu (půltilecový krok)
+      const sl = Math.abs(hs[Math.min(i + 1, cols * rows - 1)] - h)
+        + Math.abs(hs[Math.min(i + cols, cols * rows - 1)] - h)
       const patch = fbm(gx * 0.17 + 91, gy * 0.17 + 17, 29)     // hlinité patche
       const dry = fbm(gx * 0.12 + 3, gy * 0.12 + 55, 37)        // suchá tráva
-      const rd = masks(gx, gy).road
+      const rd = bil(tR, gx, gy)
       tmp.copy(cGrass1).lerp(cGrass2, vnoise(gx * 0.5, gy * 0.5, 41))
       tmp.lerp(cDry, smooth(0.52, 0.78, dry) * 0.75)
       tmp.lerp(cDirt, smooth(0.56, 0.8, patch) * 0.9)
-      tmp.lerp(cRock, smooth(0.3, 0.62, sl))
-      if (rd > 0 && rd < 4) tmp.lerp(cGravel, 0.75 - rd * 0.16)  // násep kolem silnic
+      tmp.lerp(cRock, smooth(0.16, 0.36, sl))
+      if (rd > 0.01 && rd < 0.99) tmp.lerp(cGravel, Math.max(0, 0.72 - rd * 0.55))
       if (h > 4.2) tmp.lerp(cSnow, smooth(4.2, 6.6, h))
       if (h < 0.06 && h > WATER_Y - 0.22) tmp.lerp(cSand, smooth(WATER_Y - 0.18, 0.02, h) * 0.9)
       if (h <= WATER_Y - 0.15) tmp.lerp(cBed, smooth(WATER_Y - 0.1, BED_Y + 0.2, h))
-      const j = 0.96 + lattice(ix, iy, 61) * 0.08
+      // jemný šum + cavity AO: údolí tmavší, hřbety světlejší → ostrý dojem
+      const inner = ix > 0 && iy > 0 && ix < cols - 1 && iy < rows - 1
+      const cav = inner ? h * 4 - (hs[i - 1] + hs[i + 1] + hs[i - cols] + hs[i + cols]) : 0
+      const j = 0.94 + lattice(ix, iy, 61) * 0.10
+        + (vnoise(gx * 1.9, gy * 1.9, 71) - 0.5) * 0.10
+        + Math.max(-0.22, Math.min(0.1, cav * 0.5))
       col[i * 3] = tmp.r * j; col[i * 3 + 1] = tmp.g * j; col[i * 3 + 2] = tmp.b * j
     }
   }
@@ -178,7 +189,7 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   ground.name = 'terrain'
 
   /* ── animovaná voda ───────────────────────────────────────────────────── */
-  const wgeo = new THREE.PlaneGeometry(NX * TILE, NY * TILE, 64, 40)
+  const wgeo = new THREE.PlaneGeometry(NX * TILE, NY * TILE, 96, 60)
   const wmat = new THREE.ShaderMaterial({
     transparent: true,
     uniforms: {
@@ -186,6 +197,7 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
       uDeep: { value: new THREE.Color('#17567c') },
       uShallow: { value: new THREE.Color('#2f92b4') },
       uSky: { value: new THREE.Color('#bfe0f2') },
+      uDim: { value: 1 },
     },
     vertexShader: `
       uniform float uTime;
@@ -212,7 +224,7 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
-      uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uSky;
+      uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uSky; uniform float uDim;
       varying float w; varying vec3 vN; varying vec3 vView;
       void main() {
         float k = smoothstep(-0.09, 0.09, w);
@@ -221,7 +233,7 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
         c = mix(c, uSky, fres * 0.55);
         float glint = pow(max(dot(reflect(-normalize(vView), normalize(vN)), vec3(0.35, 0.5, 0.55)), 0.0), 24.0);
         c += vec3(1.0, 0.97, 0.85) * glint * 0.5;
-        gl_FragColor = vec4(c, 0.88);
+        gl_FragColor = vec4(c * uDim, 0.88);
       }`,
   })
   const water = new THREE.Mesh(wgeo, wmat)
@@ -235,13 +247,14 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const bushes: { x: number; z: number; s: number }[] = []
   const rocks: { x: number; z: number; s: number; r: number }[] = []
   const peaks: { x: number; z: number; s: number; r: number }[] = []
+  const caps: { x: number; z: number; s: number; y: number }[] = []
   const rnd = (a: number, b: number) => lattice(a | 0, b | 0, 71) + (a % 1) * 0.13
 
   for (let gy = -EXT; gy < H + EXT; gy++) {
     for (let gx = -EXT; gx < W + EXT; gx++) {
       const inPlay = gx >= 0 && gy >= 0 && gx < W && gy < H
       const t = inPlay ? type.get(`${gx},${gy}`) : tileType(gx, gy)
-      const h = heightG(gx, gy)
+      const h = heightGF(gx + 0.5, gy + 0.5)
       if (h < WATER_Y + 0.12) continue
       const cx = (gx - (W - 1) / 2) * TILE
       const cz = (gy - (H - 1) / 2) * TILE
@@ -259,14 +272,16 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
           r: rnd(gx + i, gy + i * 2) * Math.PI,
         })
       }
-      if (rnd(gx * 1.7 + 8, gy * 2.3 + 4) < (t === 'forest' ? 0.5 : 0.16)) {
+      if (rnd(gx * 1.7 + 8, gy * 2.3 + 4) < (t === 'forest' ? 0.35 : cluster > 0.55 ? 0.28 : 0.04)) {
         bushes.push({ x: cx + (rnd(gx, gy + 3) - 0.5) * TILE, z: cz + (rnd(gx + 9, gy) - 0.5) * TILE, s: (0.5 + rnd(gx + 2, gy + 6) * 0.6) * 1.6 })
       }
       if ((t === 'mine' || h > 1.2) && rnd(gx * 2.1 + 15, gy * 1.3 + 22) < 0.5) {
         rocks.push({ x: cx + (rnd(gx + 4, gy) - 0.5) * TILE, z: cz + (rnd(gx, gy + 7) - 0.5) * TILE, s: (0.5 + rnd(gx + 6, gy + 1) * 0.9) * 1.5, r: rnd(gx + 3, gy + 8) * Math.PI })
       }
       if (outside && h > 2.6 && rnd(gx * 1.1 + 60, gy * 1.7 + 30) < 0.2) {
-        peaks.push({ x: cx, z: cz, s: 2.0 + rnd(gx + 12, gy + 24) * 3.2, r: rnd(gx + 40, gy + 50) * Math.PI })
+        const ps = 2.0 + rnd(gx + 12, gy + 24) * 3.2
+        peaks.push({ x: cx, z: cz, s: ps, r: rnd(gx + 40, gy + 50) * Math.PI })
+        caps.push({ x: cx, z: cz, s: ps * 0.42, y: h + ps * 0.62 })
       }
     }
   }
@@ -289,6 +304,16 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
     })
     im.instanceMatrix.needsUpdate = true
     deco.add(im)
+    return im
+  }
+  /** šedá variace instanceColor → les nežije jako jedna barva */
+  const vary = (im: THREE.InstancedMesh, lo: number, hi: number, seed: number) => {
+    const c = new THREE.Color()
+    for (let i = 0; i < im.count; i++) {
+      const j = lo + lattice(i, seed, 91) * (hi - lo)
+      im.setColorAt(i, c.setRGB(j, j, j))
+    }
+    if (im.instanceColor) im.instanceColor.needsUpdate = true
   }
   const trunkG = new THREE.CylinderGeometry(0.06, 0.1, 0.42, 5)
   const crown1G = new THREE.ConeGeometry(0.34, 0.62, 6)
@@ -298,11 +323,12 @@ export function buildTerrain3d(map: MapData): TerrainBuild {
   const peakG = new THREE.ConeGeometry(1.1, 1.6, 5)
   for (const g of [trunkG, crown1G, crown2G, bushG, rockG, peakG]) g.userData.cached = true
   put(trunkG, mat('#6b4c2c'), trees, 0.2)
-  put(crown1G, mat('#3d7a48'), trees, 0.62)
-  put(crown2G, mat('#4c8f55'), trees, 1.02)
-  put(bushG, mat('#40704a'), bushes, 0.12, 0.7)
-  put(rockG, mat('#847d6e'), rocks, 0.06, 0.75)
-  put(peakG, mat('#767062'), peaks, 0.7)
+  vary(put(crown1G, mat('#3f8049'), trees, 0.62)!, 0.8, 1.18, 3)
+  vary(put(crown2G, mat('#4f9457'), trees, 1.02)!, 0.82, 1.2, 4)
+  vary(put(bushG, mat('#4a7f4d'), bushes, 0.12, 0.7)!, 0.8, 1.2, 5)
+  vary(put(rockG, mat('#847d6e'), rocks, 0.06, 0.75)!, 0.85, 1.15, 6)
+  vary(put(peakG, mat('#767062'), peaks, 0.7)!, 0.85, 1.12, 7)
+  put(new THREE.ConeGeometry(1.1, 0.9, 5), mat('#e8edf4', { flat: true }), caps, 0.35)
 
   const update = (t: number) => { wmat.uniforms.uTime.value = t }
 

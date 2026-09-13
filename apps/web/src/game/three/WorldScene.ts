@@ -51,6 +51,11 @@ const SUN_NOON = new THREE.Color('#ffe3b3')
 const SUN_SET = new THREE.Color('#ff8a4a')
 const HEMI_DAY = new THREE.Color('#bcd7ff')
 const HEMI_NIGHT = new THREE.Color('#26365e')
+const MOON_C = new THREE.Color('#8ea6d8')
+const LAMP_HEAD_M = new THREE.MeshLambertMaterial({
+  color: '#e8e2cf', emissive: new THREE.Color('#ffd98a'), emissiveIntensity: 0.05,
+})
+NIGHT_MATS.push({ m: LAMP_HEAD_M, min: 0.05, max: 2.6 })
 
 export class WorldScene {
   private renderer: THREE.WebGLRenderer
@@ -294,7 +299,7 @@ export class WorldScene {
     shoulderGeo.userData.cached = true; asphaltGeo.userData.cached = true
     curbGeo.userData.cached = true; dashGeo.userData.cached = true
     const shoulder = new THREE.InstancedMesh(shoulderGeo, mat('#7d7460'), tiles.length)
-    const asphalt = new THREE.InstancedMesh(asphaltGeo, mat('#61676f'), tiles.length)
+    const asphalt = new THREE.InstancedMesh(asphaltGeo, mat('#6e747c'), tiles.length)
     const curb = new THREE.InstancedMesh(curbGeo, mat('#8b9199'), tiles.length)
     asphalt.receiveShadow = true; shoulder.receiveShadow = true; curb.receiveShadow = true
     const dashes: { x: number; z: number; rot: number }[] = []
@@ -316,9 +321,38 @@ export class WorldScene {
       else if (axisNW || straightNS) dashes.push({ x: pos.x, z: pos.z, rot: axisNW ? -Math.PI / 4 : 0 })
     })
     shoulder.instanceMatrix.needsUpdate = true
+    shoulder.instanceMatrix.needsUpdate = true
     asphalt.instanceMatrix.needsUpdate = true
     curb.instanceMatrix.needsUpdate = true
     this.roadGroup.add(shoulder, asphalt, curb)
+    const lamps: { x: number; z: number; h: number }[] = []
+    tiles.forEach(([x, y]) => {
+      const n = roadSet.has(`${x},${y - 1}`); const s2 = roadSet.has(`${x},${y + 1}`)
+      const w2 = roadSet.has(`${x - 1},${y}`); const e = roadSet.has(`${x + 1},${y}`)
+      const ns = (n || s2) && !w2 && !e
+      const ew = (w2 || e) && !n && !s2
+      if (!ns && !ew) return
+      if (((x * 7 + y * 13) % 4 + 4) % 4 !== 0) return
+      const pos = this.tilePos(x, y)
+      const hh = this.terrain?.heightAt(pos.x, pos.z) ?? 0
+      if (ns) lamps.push({ x: pos.x + 1.18, z: pos.z, h: hh })
+      else lamps.push({ x: pos.x, z: pos.z + 1.18, h: hh })
+    })
+    if (lamps.length) {
+      const poleG = new THREE.CylinderGeometry(0.035, 0.055, 1.5, 5)
+      const headG = new THREE.BoxGeometry(0.24, 0.07, 0.13)
+      poleG.userData.cached = true; headG.userData.cached = true
+      const poles = new THREE.InstancedMesh(poleG, mat('#3c4149'), lamps.length)
+      const heads = new THREE.InstancedMesh(headG, LAMP_HEAD_M, lamps.length)
+      poles.castShadow = true
+      lamps.forEach((l, i) => {
+        poles.setMatrixAt(i, new THREE.Matrix4().makeTranslation(l.x, l.h + 0.77, l.z))
+        heads.setMatrixAt(i, new THREE.Matrix4().makeTranslation(l.x, l.h + 1.55, l.z))
+      })
+      poles.instanceMatrix.needsUpdate = true
+      heads.instanceMatrix.needsUpdate = true
+      this.roadGroup.add(poles, heads)
+    }
     if (dashes.length) {
       const dm = new THREE.InstancedMesh(dashGeo, mat('#cfd3d8'), dashes.length)
       dashes.forEach((d, i) => {
@@ -497,11 +531,19 @@ export class WorldScene {
 
     const theta = ((h - 6) / 12) * Math.PI           // 6 h východ, 12 h zenit, 18 h západ
     const elev = Math.sin(theta)
-    this.sun.position.set(Math.cos(theta) * 80, Math.max(elev, -0.35) * 70 + 10, 34)
-    this.sun.intensity = Math.max(0.06, elev * 1.75)
+    // v noci přejde slunce v měsíc: studené světlo shora, ne tma od země
+    this.sun.position.set(
+      THREE.MathUtils.lerp(Math.cos(theta) * 80, -52, night),
+      THREE.MathUtils.lerp(Math.max(elev, -0.35) * 70 + 10, 54, night),
+      THREE.MathUtils.lerp(34, -26, night),
+    )
+    this.sun.intensity = Math.max(0.04, elev * 2.6) * (1 - night) + 0.42 * night
     const dusk = Math.max(0, 1 - Math.abs(elev) * 4) * (elev > -0.3 ? 1 : 0)
     this.sun.color.copy(SUN_NOON).lerp(SUN_SET, dusk * 0.8)
-    this.hemi.intensity = 0.85 - 0.62 * night
+    if (night > 0) this.sun.color.lerp(MOON_C, night)
+    this.hemi.intensity = 1.25 - 0.9 * night
+    const wu = (this.terrain?.water.material as THREE.ShaderMaterial)?.uniforms
+    if (wu?.uDim) wu.uDim.value = 1 - 0.6 * night
     this.hemi.color.copy(HEMI_DAY).lerp(HEMI_NIGHT, night)
     this.bg.copy(BG_DAY).lerp(BG_NIGHT, night)
     if (dusk > 0.02 && night < 0.9) this.bg.lerp(BG_DUSK, dusk * 0.45 * (1 - night))
